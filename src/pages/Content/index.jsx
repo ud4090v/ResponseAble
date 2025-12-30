@@ -1,12 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-
-// API Keys - Developer Configuration (not user-visible)
-// TODO: Add your API keys here before building
-const API_KEYS = {
-    openai: '', // Add your OpenAI API key here
-    grok: '' // Add your Grok/XAI API key here
-};
+import API_KEYS from '../../config/apiKeys.js';
 
 // Ensure chrome API is available
 const getChromeRuntime = () => {
