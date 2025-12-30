@@ -42,7 +42,7 @@ var options = {
     options: path.join(__dirname, 'src', 'pages', 'Options', 'index.jsx'),
     popup: path.join(__dirname, 'src', 'pages', 'Popup', 'index.jsx'),
     background: path.join(__dirname, 'src', 'pages', 'Background', 'index.js'),
-    contentScript: path.join(__dirname, 'src', 'pages', 'Content', 'index.js'),
+    contentScript: './src/pages/Content/index.jsx',
     devtools: path.join(__dirname, 'src', 'pages', 'Devtools', 'index.js'),
     panel: path.join(__dirname, 'src', 'pages', 'Panel', 'index.jsx'),
   },
@@ -180,6 +180,33 @@ var options = {
         {
           from: 'src/assets/img/icon-34.png',
           to: path.join(__dirname, 'build'),
+          force: true,
+        },
+      ],
+    }),
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: 'src/assets/img/RAIcon20x20ors2.png',
+          to: path.join(__dirname, 'build', 'raicon.png'),
+          force: true,
+        },
+      ],
+    }),
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: 'src/assets/img/RAIcon20x20ors2.png',
+          to: path.join(__dirname, 'build', 'raicon20x20.png'),
+          force: true,
+        },
+      ],
+    }),
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: 'src/assets/img/RAIcon_outline.png',
+          to: path.join(__dirname, 'build', 'raiconvector.png'),
           force: true,
         },
       ],
