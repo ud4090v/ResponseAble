@@ -1,25 +1,82 @@
-import React from 'react';
-import logo from '../../assets/img/logo.svg';
-import Greetings from '../../containers/Greetings/Greetings';
+import React, { useEffect, useState } from 'react';
 import './Popup.css';
 
+// Cross-browser API compatibility
+const getBrowser = () => {
+  if (typeof chrome !== 'undefined' && chrome.runtime) {
+    return chrome;
+  }
+  if (typeof browser !== 'undefined' && browser.runtime) {
+    return browser;
+  }
+  return null;
+};
+
 const Popup = () => {
+  const [apiProvider, setApiProvider] = useState('');
+  const [apiModel, setApiModel] = useState('');
+  const [iconUrl, setIconUrl] = useState('');
+
+  useEffect(() => {
+    const browserAPI = getBrowser();
+    if (!browserAPI) return;
+
+    // Load current settings
+    if (browserAPI.storage) {
+      browserAPI.storage.sync.get(['apiProvider', 'apiModel'], (result) => {
+        setApiProvider(result.apiProvider || 'grok');
+        setApiModel(result.apiModel || 'grok-4-latest');
+      });
+    }
+
+    // Get icon URL
+    if (browserAPI.runtime) {
+      try {
+        const url = browserAPI.runtime.getURL('raicon20x20.png');
+        setIconUrl(url);
+      } catch (error) {
+        console.error('Failed to get icon URL:', error);
+      }
+    }
+  }, []);
+
+  const openOptions = () => {
+    const browserAPI = getBrowser();
+    if (browserAPI && browserAPI.runtime) {
+      browserAPI.runtime.openOptionsPage();
+      window.close();
+    }
+  };
+
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/pages/Popup/Popup.jsx</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React!
-        </a>
-      </header>
+    <div className="popup-container">
+      <div className="popup-header">
+        <h1 className="popup-title">
+          {iconUrl && (
+            <img src={iconUrl} alt="ResponseAble" className="popup-icon" />
+          )}
+          ResponseAble
+        </h1>
+        <p className="popup-subtitle">AI-Powered Email Responses</p>
+      </div>
+
+      <div className="popup-content">
+        <div className="popup-info">
+          <p>Use the <strong>Generate</strong> or <strong>Respond</strong> button in Gmail to create AI-powered email drafts.</p>
+        </div>
+
+        {apiProvider && apiModel && (
+          <div className="popup-settings">
+            <p><strong>Current Settings:</strong></p>
+            <p>Provider: <span className="setting-value">{apiProvider.toUpperCase()}</span></p>
+            <p>Model: <span className="setting-value">{apiModel}</span></p>
+          </div>
+        )}
+
+        <button className="popup-button" onClick={openOptions}>
+          Open Settings
+        </button>
+      </div>
     </div>
   );
 };

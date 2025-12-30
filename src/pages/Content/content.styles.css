@@ -1,0 +1,93 @@
+/* ResponseAble content styles */
+.responseable-float-button {
+    position: fixed !important;
+    bottom: 30px !important;
+    right: 30px !important;
+    z-index: 999999 !important;
+}
+
+.responseable-reply-button {
+    background: #D3E3FD !important;
+    margin-left: 1px !important;
+    margin-right: 1px !important;
+    user-select: none !important;
+    height: 28px !important;
+    color: #444746;
+    padding-right: 16px !important;
+    padding-left: 16px !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+    user-select: none !important;
+    /* display: inline-flex !important;
+    align-items: center !important; */
+}
+
+.responseable-reply-button img,
+.responseable-generate img,
+.responseable-button img,
+.T-I.responseable-reply-button img,
+.T-I.responseable-generate img {
+    width: 20px !important;
+    height: 20px !important;
+    max-width: 20px !important;
+    max-height: 20px !important;
+    min-width: 20px !important;
+    min-height: 20px !important;
+    display: inline-block !important;
+    vertical-align: middle !important;
+    margin-right: 6px !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    position: relative !important;
+    object-fit: contain !important;
+    flex-shrink: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    background-image: none !important;
+}
+
+/* LinkedIn-specific button styling */
+.linkedin .responseable-button,
+.responseable-button.artdeco-button {
+    border-radius: 16px !important;
+    height: 28px !important;
+    padding: 4px 12px !important;
+    font-weight: 600 !important;
+}
+
+.responseable-linkedin-button {
+    border-radius: 16px !important;
+    padding: 4px 12px !important;
+    height: 28px !important;
+    background: #0A66C2 !important;
+    font-weight: 600 !important;
+    margin: 0 8px 0 0 !important;
+    vertical-align: baseline !important;
+    align-self: baseline !important;
+}
+
+/* LinkedIn comment button styling */
+.responseable-comment-button {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    z-index: 1000 !important;
+    position: relative !important;
+}
+
+/* LinkedIn comment button icon styling */
+.responseable-comment-button img {
+    width: 20px !important;
+    height: 20px !important;
+    max-width: 20px !important;
+    max-height: 20px !important;
+    display: inline-block !important;
+    vertical-align: middle !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    object-fit: contain !important;
+    flex-shrink: 0 !important;
+    position: relative !important;
+}
