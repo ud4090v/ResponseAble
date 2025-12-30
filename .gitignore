@@ -22,3 +22,6 @@
 
 # secrets
 secrets.*.js
+
+# API keys (developer configuration)
+src/config/apiKeys.js
