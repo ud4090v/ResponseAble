@@ -1,6 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import API_KEYS from '../../config/apiKeys.js';
+import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
 
 // Ensure chrome API is available
 const getChromeRuntime = () => {
@@ -21,9 +21,43 @@ let apiConfig = {
     numVariants: 4,
 };
 
-// Get API key for the selected provider
-const getApiKey = (provider) => {
-    return API_KEYS[provider] || '';
+// Helper function to make API calls through Vercel proxy
+const callProxyAPI = async (provider, model, messages, temperature = 0.8, max_tokens = 1000) => {
+    try {
+        const response = await fetch(VERCEL_PROXY_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                provider: provider,
+                model: model,
+                messages: messages,
+                temperature: temperature,
+                max_tokens: max_tokens
+            })
+        });
+
+        if (!response.ok) {
+            let errorData = {};
+            try {
+                errorData = await response.json();
+            } catch (e) {
+                errorData = { error: { message: response.statusText } };
+            }
+            const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+            throw new Error(errorMessage);
+        }
+
+        return await response.json();
+    } catch (error) {
+        // Handle network errors (CORS, connection issues, etc.)
+        if (error.message.includes('Failed to fetch') || error.name === 'TypeError') {
+            throw new Error(`Unable to connect to Vercel proxy API. Please check:\n1. Your internet connection\n2. The Vercel proxy URL is correct: ${VERCEL_PROXY_URL}\n3. The Vercel deployment is live and accessible\n\nError: ${error.message}`);
+        }
+        // Re-throw other errors as-is
+        throw error;
+    }
 };
 
 // Load API configuration from storage
@@ -60,6 +94,123 @@ if (storage) {
     });
 }
 
+// User writing style profile management
+const defaultStyleProfile = {
+    formality: 'professional',
+    sentence_length: 'medium',
+    word_choice: 'moderate',
+    punctuation_style: 'standard',
+    greeting_patterns: [],
+    closing_patterns: [],
+    usesEmojis: false,
+    usesExclamations: false,
+    startsWithGreeting: true,
+    endsWithSignOff: true,
+    sample_count: 0,
+    last_updated: null
+};
+
+// Load user writing style profile from storage
+const loadStyleProfile = async () => {
+    return new Promise((resolve) => {
+        const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
+        if (!storage) {
+            resolve(defaultStyleProfile);
+            return;
+        }
+        storage.sync.get(['userWritingStyle'], (result) => {
+            const profile = result.userWritingStyle || defaultStyleProfile;
+            // Ensure all required fields exist
+            resolve({
+                formality: profile.formality || defaultStyleProfile.formality,
+                sentence_length: profile.sentence_length || defaultStyleProfile.sentence_length,
+                word_choice: profile.word_choice || defaultStyleProfile.word_choice,
+                punctuation_style: profile.punctuation_style || defaultStyleProfile.punctuation_style,
+                greeting_patterns: profile.greeting_patterns || [],
+                closing_patterns: profile.closing_patterns || [],
+                usesEmojis: profile.usesEmojis !== undefined ? profile.usesEmojis : defaultStyleProfile.usesEmojis,
+                usesExclamations: profile.usesExclamations !== undefined ? profile.usesExclamations : defaultStyleProfile.usesExclamations,
+                startsWithGreeting: profile.startsWithGreeting !== undefined ? profile.startsWithGreeting : defaultStyleProfile.startsWithGreeting,
+                endsWithSignOff: profile.endsWithSignOff !== undefined ? profile.endsWithSignOff : defaultStyleProfile.endsWithSignOff,
+                sample_count: profile.sample_count || 0,
+                last_updated: profile.last_updated || null
+            });
+        });
+    });
+};
+
+// Save user writing style profile to storage
+const saveStyleProfile = async (profile) => {
+    return new Promise((resolve, reject) => {
+        const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
+        if (!storage) {
+            reject(new Error('Storage API not available'));
+            return;
+        }
+        profile.last_updated = new Date().toISOString();
+        storage.sync.set({ userWritingStyle: profile }, () => {
+            if (chrome.runtime.lastError) {
+                reject(chrome.runtime.lastError);
+            } else {
+                resolve(profile);
+            }
+        });
+    });
+};
+
+// Merge new style observations with existing profile (fine-tuning)
+const mergeStyleProfile = (existingProfile, newObservations) => {
+    const existingCount = existingProfile.sample_count || 0;
+    const newCount = newObservations.sample_count || 1;
+    const totalCount = existingCount + newCount;
+
+    // Weighted average for numeric-like values
+    const mergeValue = (existing, newVal, weight) => {
+        if (!existing || existingCount === 0) return newVal;
+        // Simple merge: favor existing if we have many samples, favor new if we have few
+        const existingWeight = Math.min(existingCount / 10, 0.7); // Cap at 70% weight for existing
+        const newWeight = 1 - existingWeight;
+        return existingWeight > 0.5 ? existing : newVal; // Use existing if we have enough samples, otherwise use new
+    };
+
+    // Merge arrays (keep most common patterns, add new ones)
+    const mergePatterns = (existing, newPatterns, maxPatterns = 5) => {
+        const combined = [...(existing || []), ...(newPatterns || [])];
+        // Count frequency and keep most common
+        const frequency = {};
+        combined.forEach(pattern => {
+            frequency[pattern] = (frequency[pattern] || 0) + 1;
+        });
+        return Object.entries(frequency)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, maxPatterns)
+            .map(([pattern]) => pattern);
+    };
+
+    // Merge boolean values: use weighted voting (favor existing if we have many samples)
+    const mergeBoolean = (existing, newVal) => {
+        if (existingCount === 0) return newVal;
+        // If we have many samples, favor existing; if few samples, favor new
+        const existingWeight = Math.min(existingCount / 10, 0.7);
+        return existingWeight > 0.5 ? existing : newVal;
+    };
+
+    return {
+        formality: mergeValue(existingProfile.formality, newObservations.formality, totalCount),
+        sentence_length: mergeValue(existingProfile.sentence_length, newObservations.sentence_length, totalCount),
+        word_choice: mergeValue(existingProfile.word_choice, newObservations.word_choice, totalCount),
+        punctuation_style: mergeValue(existingProfile.punctuation_style, newObservations.punctuation_style, totalCount),
+        greeting_patterns: mergePatterns(existingProfile.greeting_patterns, newObservations.greeting_patterns),
+        closing_patterns: mergePatterns(existingProfile.closing_patterns, newObservations.closing_patterns),
+        usesEmojis: mergeBoolean(existingProfile.usesEmojis, newObservations.usesEmojis),
+        usesExclamations: mergeBoolean(existingProfile.usesExclamations, newObservations.usesExclamations),
+        startsWithGreeting: mergeBoolean(existingProfile.startsWithGreeting, newObservations.startsWithGreeting),
+        endsWithSignOff: mergeBoolean(existingProfile.endsWithSignOff, newObservations.endsWithSignOff),
+        sample_count: totalCount,
+        last_updated: new Date().toISOString()
+    };
+};
+
 // Platform detection
 const detectPlatform = () => {
     const hostname = window.location.hostname;
@@ -72,32 +223,257 @@ const detectPlatform = () => {
     return null;
 };
 
+// User packages for email type classification
+const userPackages = [
+    {
+        "name": "sales",
+        "description": "emails about deals, follow-ups, objections, meetings, and closing business",
+        "intent": "The sender is selling a product or service to the recipient. Consider their approach: cold outreach (initial contact), follow-up (nudge after no response), offering discount (price incentive), value proposition (highlight benefits), or closing (meeting/demo request).",
+        "roleDescription": "a world-class B2B sales email writer",
+        "contextSpecific": "Respond as a potential customer evaluating the offer. Consider: pricing, value proposition, fit with your needs, and next steps. Use variants that match your interest level and decision-making stage."
+    },
+    {
+        "name": "recruitment",
+        "description": "emails about hiring, candidates, sourcing talent, interviews, and job offers",
+        "intent": "The sender is a recruiter offering a job position or opportunity to the recipient. Consider what they're offering: specific role details, interview invitation, salary range, company culture fit, or next steps in hiring process.",
+        "roleDescription": "a professional candidate responding to a recruiter's job offer",
+        "contextSpecific": "The sender (recruiter) is OFFERING a job position to YOU (the recipient/candidate). Respond as the candidate - express interest, ask questions about the role/company/compensation, or politely decline. Consider: role fit, career goals, compensation, company culture, and work-life balance. Do NOT respond as if you are offering them a job."
+    },
+    {
+        "name": "jobseeker",
+        "description": "emails about job applications, interviews, follow-ups as a candidate, and career opportunities",
+        "intent": "The sender is a job seeker applying to or following up with the recipient. Consider their intent: expressing interest in a role, attaching resume, requesting interview, thanking after meeting, or seeking referrals.",
+        "roleDescription": "a hiring manager or recruiter responding to a job application",
+        "contextSpecific": "The sender is applying for a position. Respond as the recipient (hiring manager/recruiter). Consider: candidate qualifications, fit with role requirements, next steps in hiring process, and providing constructive feedback if declining."
+    },
+    {
+        "name": "support",
+        "description": "emails about customer issues, complaints, troubleshooting, and resolutions",
+        "intent": "The sender is seeking help or reporting an issue to the recipient. Consider the problem: technical bug, billing inquiry, feature request, or service complaint, and urgency level.",
+        "roleDescription": "an empathetic customer support specialist",
+        "contextSpecific": "Address the customer's concern professionally and helpfully. Consider: urgency, impact, resolution options, escalation needs, and customer satisfaction. Provide clear next steps and timelines."
+    },
+    {
+        "name": "networking",
+        "description": "emails about professional connections, introductions, referrals, and collaborations",
+        "intent": "The sender is building or maintaining a professional relationship with the recipient. Consider the goal: warm introduction, referral request, collaboration proposal, or staying in touch after event.",
+        "roleDescription": "a professional building genuine connections",
+        "contextSpecific": "Build a meaningful professional relationship. Consider: mutual value, relationship building, reciprocity, and long-term connection. Keep it professional, warm, and relationship-focused."
+    },
+    {
+        "name": "generic",
+        "description": "general professional emails not fitting specific categories",
+        "intent": "The sender has a neutral professional intent toward the recipient. Consider basic goals like information sharing, scheduling, or simple acknowledgments without strong sales/hiring/support elements.",
+        "roleDescription": "a professional email reply writer",
+        "contextSpecific": "Carefully analyze the source email to understand the context, relationship, and intent. Respond appropriately from the recipient's perspective, considering the specific situation and relationship dynamics."
+    }
+];
+
+// Extract user's sent emails from thread (for style analysis)
+const extractUserEmails = (platform, richContext) => {
+    const userEmails = [];
+    const seenTexts = new Set(); // Avoid duplicates
+
+    if (platform === 'gmail') {
+        // Method 1: Look for "Sent" labels or indicators in thread items
+        const threadItems = document.querySelectorAll('div[role="listitem"]');
+        threadItems.forEach(item => {
+            // Check for "Sent" indicator (Gmail shows this for sent messages)
+            const hasSentLabel = item.innerText?.includes('Sent') ||
+                item.querySelector('[aria-label*="Sent"]') ||
+                item.querySelector('.g2, .g3, .g4, .g5, .g6, .g7, .g8, .g9, .gA, .gB'); // Gmail sent message classes
+
+            if (hasSentLabel || sentIndicator) {
+                const messageDiv = item.querySelector('div[dir="ltr"], div[aria-label="Message Body"]');
+                if (messageDiv && messageDiv.getAttribute('role') !== 'textbox') {
+                    const text = messageDiv.innerText?.trim() || messageDiv.textContent?.trim() || '';
+                    // Clean text: remove quoted replies, signatures, etc.
+                    const cleanText = text
+                        .replace(/On .* wrote:.*/gs, '')
+                        .replace(/From:.*/gi, '')
+                        .replace(/Sent:.*/gi, '')
+                        .replace(/To:.*/gi, '')
+                        .replace(/Subject:.*/gi, '')
+                        .trim();
+
+                    if (cleanText && cleanText.length > 30 && !seenTexts.has(cleanText)) {
+                        seenTexts.add(cleanText);
+                        userEmails.push(cleanText);
+                    }
+                }
+            }
+        });
+
+        // Method 2: Look for messages that don't have "From:" indicators (likely sent by user)
+        // This is a fallback if Method 1 doesn't find enough
+        if (userEmails.length === 0) {
+            const allMessageBodies = document.querySelectorAll('div[aria-label="Message Body"]');
+            allMessageBodies.forEach(body => {
+                if (body.getAttribute('role') === 'textbox') return; // Skip compose box
+
+                const text = body.innerText?.trim() || '';
+                // If message doesn't have "From:" or "On ... wrote:" patterns, it might be from user
+                if (text && text.length > 30 &&
+                    !text.match(/^From:/i) &&
+                    !text.match(/^On .+ wrote:/i) &&
+                    !seenTexts.has(text)) {
+                    seenTexts.add(text);
+                    userEmails.push(text);
+                }
+            });
+        }
+    } else if (platform === 'linkedin') {
+        // For LinkedIn, user's messages are typically in containers with specific classes
+        // User messages are usually on the right side or have "msg-s-message-listitem--by-current-user" class
+        const userMessageItems = document.querySelectorAll(
+            '.msg-s-message-listitem--by-current-user .msg-s-message-list__message-body, ' +
+            '.msg-s-message-listitem[data-test-id*="current-user"] .msg-s-message-list__message-body'
+        );
+
+        userMessageItems.forEach(block => {
+            const text = block.innerText?.trim() || block.textContent?.trim() || '';
+            if (text && text.length > 20 && !seenTexts.has(text)) {
+                seenTexts.add(text);
+                userEmails.push(text);
+            }
+        });
+
+        // Fallback: Look for all message bodies and try to identify user's messages
+        if (userEmails.length === 0) {
+            const messageBlocks = document.querySelectorAll('.msg-s-message-list__message-body');
+            messageBlocks.forEach(block => {
+                const parent = block.closest('.msg-s-message-listitem');
+                // Check if message is aligned right (user's messages) or has specific attributes
+                const isRightAligned = parent && (
+                    parent.classList.contains('msg-s-message-listitem--by-current-user') ||
+                    parent.querySelector('[data-test-id*="current-user"]') ||
+                    window.getComputedStyle(parent).textAlign === 'right'
+                );
+
+                if (isRightAligned) {
+                    const text = block.innerText?.trim() || block.textContent?.trim() || '';
+                    if (text && text.length > 20 &&
+                        !text.includes('connected') &&
+                        !text.includes('viewed') &&
+                        !text.includes('liked') &&
+                        !seenTexts.has(text)) {
+                        seenTexts.add(text);
+                        userEmails.push(text);
+                    }
+                }
+            });
+        }
+    }
+
+    return userEmails;
+};
+
+// Analyze writing style from user's emails
+const analyzeWritingStyle = async (userEmails, platform) => {
+    if (!userEmails || userEmails.length === 0) {
+        return null; // No user emails to analyze
+    }
+
+    // Combine user emails for analysis
+    const combinedText = userEmails.join('\n\n---\n\n');
+
+    // Use AI to analyze writing style
+    await loadApiConfig();
+    const classificationModel = apiConfig.provider === 'openai'
+        ? 'gpt-4o-mini'
+        : 'grok-4-fast';
+
+    const styleAnalysisPrompt = `Analyze the writing style of the user's emails below and return ONLY a JSON object with:
+{
+  "formality": "formal" | "professional" | "professional-casual" | "casual",
+  "sentence_length": "short" | "medium" | "long",
+  "word_choice": "simple" | "moderate" | "complex",
+  "punctuation_style": "minimal" | "standard" | "frequent" | "emojis",
+  "greeting_patterns": ["array of greeting patterns found, e.g., 'Hi [Name],', 'Hello,'"],
+  "closing_patterns": ["array of closing patterns found, e.g., 'Best regards,', 'Thanks,'"],
+  "usesEmojis": boolean (true if user frequently uses emojis, false otherwise),
+  "usesExclamations": boolean (true if user frequently uses exclamation marks, false otherwise),
+  "startsWithGreeting": boolean (true if user typically starts emails with a greeting, false otherwise),
+  "endsWithSignOff": boolean (true if user typically ends emails with a sign-off/closing, false otherwise)
+}
+
+Analyze these user emails:
+${combinedText}
+
+Return ONLY valid JSON, no other text.`;
+
+    try {
+        const messages = [
+            {
+                role: 'system',
+                content: styleAnalysisPrompt
+            },
+            {
+                role: 'user',
+                content: 'Analyze the writing style from the emails above.'
+            }
+        ];
+
+        const styleData = await callProxyAPI(
+            apiConfig.provider,
+            classificationModel,
+            messages,
+            0.3,  // temperature
+            500   // max_tokens
+        );
+
+        let styleContent = styleData.choices?.[0]?.message?.content || '{}';
+
+        // Clean up content
+        styleContent = styleContent.trim();
+        if (styleContent.startsWith('```json')) {
+            styleContent = styleContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+        } else if (styleContent.startsWith('```')) {
+            styleContent = styleContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+        }
+
+        const styleAnalysis = JSON.parse(styleContent);
+        return {
+            formality: styleAnalysis.formality || 'professional',
+            sentence_length: styleAnalysis.sentence_length || 'medium',
+            word_choice: styleAnalysis.word_choice || 'moderate',
+            punctuation_style: styleAnalysis.punctuation_style || 'standard',
+            greeting_patterns: styleAnalysis.greeting_patterns || [],
+            closing_patterns: styleAnalysis.closing_patterns || [],
+            usesEmojis: styleAnalysis.usesEmojis === true,
+            usesExclamations: styleAnalysis.usesExclamations === true,
+            startsWithGreeting: styleAnalysis.startsWithGreeting !== false, // Default to true
+            endsWithSignOff: styleAnalysis.endsWithSignOff !== false, // Default to true
+            sample_count: userEmails.length
+        };
+    } catch (error) {
+        console.error('Style analysis error:', error);
+        return null;
+    }
+};
+
 // Email classification function - uses AI to classify email type and extract entities
-const classifyEmail = async (richContext, sourceMessageText, platform) => {
+const classifyEmail = async (richContext, sourceMessageText, platform, threadHistory = '', senderName = null) => {
     try {
         await loadApiConfig();
-        const apiKey = getApiKey(apiConfig.provider);
-        if (!apiKey) {
-            console.warn('API key not available for classification, using default');
-            return {
-                type: 'other',
-                intent: 'general inquiry',
-                response_goals: ['respond appropriately'],
-                tone_needed: 'professional',
-                tone_sets: { 'respond appropriately': ['professional'] },
-                variant_sets: {
-                    'respond appropriately': [
-                        'Friendly response',
-                        'Insightful response',
-                        'Polite response',
-                        'Professional neutral response',
-                        'Concise response'
-                    ]
-                },
-                recipient_name: richContext.recipientName || '',
-                recipient_company: richContext.recipientCompany || null,
-                key_topics: []
-            };
+
+        // Extract and analyze user's writing style from thread
+        const userEmails = extractUserEmails(platform, richContext);
+        let currentStyleProfile = await loadStyleProfile();
+
+        if (userEmails.length > 0) {
+            // Analyze style from current thread
+            const newStyleObservations = await analyzeWritingStyle(userEmails, platform);
+            if (newStyleObservations) {
+                // Merge with existing profile (fine-tuning)
+                currentStyleProfile = mergeStyleProfile(currentStyleProfile, newStyleObservations);
+                // Save updated profile
+                try {
+                    await saveStyleProfile(currentStyleProfile);
+                } catch (saveError) {
+                    console.warn('Failed to save style profile:', saveError);
+                }
+            }
         }
 
         // Use cheaper/faster models for classification
@@ -105,68 +481,177 @@ const classifyEmail = async (richContext, sourceMessageText, platform) => {
             ? 'gpt-4o-mini'
             : 'grok-4-fast';
 
-        const apiEndpoint = apiConfig.provider === 'openai'
-            ? 'https://api.openai.com/v1/chat/completions'
-            : 'https://api.x.ai/v1/chat/completions';
-
-        const headers = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        };
-
         // Get numVariants for the classification prompt
         const numVariants = apiConfig.numVariants || 4;
 
-        const classificationPrompt = `You are an expert email classifier. Analyze the ${platform === 'linkedin' ? 'message' : 'email'} context and return ONLY a JSON object with:
+        // Format packages as string for type determination prompt
+        const typesWithContext = userPackages.map(p =>
+            `${p.name}: "${p.description}" (intent: ${p.intent}, roleDescription: ${p.roleDescription}, contextSpecific: ${p.contextSpecific})`
+        ).join(', ');
+
+        // Step 1: Determine email type based on packages
+        const typeDeterminationPrompt = `The user has access to the following specialized packages:
+
+${typesWithContext}
+
+Analyze the provided email context and determine which package it best fits.
+
+CRITICAL: Prioritize the LATEST email when determining the type. While you should consider the entire thread for context, the type should primarily be based on what the sender is doing in their MOST RECENT message. Use thread history only for background understanding, not as the primary basis for type determination.
+
+Return ONLY a valid JSON object with exactly this structure:
 {
-  "type": "sales" | "recruiter" | "jobseeker" | "support" | "networking" | "personal" | "other",
-  "intent": Suggest the sender's primary intent from the recipient's perspective as a short, descriptive string (e.g., "offering a job", "selling software", "requesting a meeting", "inquiring about services", "complaining about support", "building network", "sharing feedback"). Be specific and natural — no fixed list.
-  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. Each is a descriptive string (e.g., "politely decline", "negotiate terms", "express strong interest", "ask clarifying questions", "offer alternative", "acknowledge and redirect"). Base these directly on the detected intent and overall context. Be nuanced and realistic.
-  "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label. Keep titles concise and action-oriented (e.g., "Decline", "Negotiate", "Express Interest", "Ask Questions", "Offer Alternative"). The title should capture the essence of the goal.
-  "tone_needed": The single most appropriate tone for the reply as a short string (e.g., "confident", "empathetic and professional"). This will be used as the primary tone. Base tone_needed directly on the detected intent and overall context. Be nuanced and realistic.
-  "tone_sets": Object with keys matching response_goals, each containing array of suggested ranked tone strings based on the response_goals and overall context. Each tone is a short string (e.g., "confident", "empathetic and professional", "polite but firm").
-  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance. Each variant is a short descriptive label (e.g., "Warm Follow-Up", "Objection Handler - Price", "Express Strong Interest", "Empathetic Acknowledgment", "Polite Decline").
-  "recipient_name": string,
-  "recipient_company": string or null,
-  "key_topics": array of strings (max 5)
+  "matched_type": {
+    "name": string,                 // the package name (e.g., "sales")
+    "description": string,          // full description from the package
+    "intent": string,               // full intent from the package
+    "roleDescription": string,      // full roleDescription from the package
+    "contextSpecific": string       // full contextSpecific from the package
+  },
+  "confidence": number (0.0 to 1.0), // how strong the match is
+  "reason": string                  // brief explanation of the match
 }
 
-Be highly context-specific for intent, goals, tones, and variants. Base everything directly on the actual email content, relationship, and situation. Be accurate and conservative — default to "other" if unclear. Return ONLY valid JSON, no other text.`;
+Rules:
+- Only choose from the listed packages above.
+- Return the COMPLETE matched_type object including name, description, intent, roleDescription, and contextSpecific from the matched package.
+- If no package strongly matches, return the "generic" package with all its attributes.
+- Be precise and use both description and intent to guide your decision.
+- PRIORITIZE the latest email content when making your determination.`;
 
-        const requestBody = {
-            model: classificationModel,
-            messages: [
-                {
-                    role: 'system',
-                    content: classificationPrompt
-                },
-                {
-                    role: 'user',
-                    content: `Email context:\n${richContext.fullContext}\n\nSource ${platform === 'linkedin' ? 'message' : 'email'}:\n${sourceMessageText}`
-                }
-            ],
-            temperature: 0.3,
-            max_tokens: 1200
-        };
+        // Extract the actual email being replied to and thread history separately
+        // sourceMessageText is the ACTUAL email being replied to (not latest, but the specific one)
+        const emailBeingRepliedTo = sourceMessageText || '';
+        // Use provided threadHistory if available, otherwise fall back to richContext.thread
+        // threadHistory should NOT include the email being replied to
+        const previousThreadHistory = threadHistory || (richContext.thread && richContext.thread !== 'New message'
+            ? richContext.thread
+            : '');
 
-        // Add JSON format for OpenAI models that support it (gpt-4o-mini and newer)
-        if (apiConfig.provider === 'openai' && (classificationModel.includes('gpt-4o') || classificationModel.includes('gpt-3.5'))) {
-            requestBody.response_format = { type: 'json_object' };
+        // Use senderName if provided (extracted from the email being replied to), otherwise fall back to richContext
+        const actualSenderName = senderName || richContext.recipientName || '';
+
+        // First API call: Determine type
+        const typeDeterminationMessages = [
+            {
+                role: 'system',
+                content: typeDeterminationPrompt
+            },
+            {
+                role: 'user',
+                content: `=== EMAIL BEING REPLIED TO (USE THIS FOR TYPE DETERMINATION - IGNORE THREAD HISTORY BELOW) ===
+${emailBeingRepliedTo}
+
+${previousThreadHistory ? `=== PREVIOUS THREAD HISTORY (IGNORE FOR TYPE DETERMINATION - BACKGROUND ONLY) ===
+${previousThreadHistory}
+
+REMINDER: Determine the type based on the LATEST email above. The thread history is only for context, NOT for determining the type.
+
+` : ''}${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
+            }
+        ];
+
+        let typeMatchResult;
+        try {
+            const typeData = await callProxyAPI(
+                apiConfig.provider,
+                classificationModel,
+                typeDeterminationMessages,
+                0.3,  // temperature
+                1200  // max_tokens - increased to ensure complete JSON responses
+            );
+
+            let typeContent = typeData.choices?.[0]?.message?.content || '{}';
+
+            // Clean up content - remove markdown code blocks if present
+            typeContent = typeContent.trim();
+            if (typeContent.startsWith('```json')) {
+                typeContent = typeContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+            } else if (typeContent.startsWith('```')) {
+                typeContent = typeContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+            }
+
+            typeMatchResult = JSON.parse(typeContent);
+        } catch (typeError) {
+            console.error('Type determination error:', typeError);
+            // Fallback to generic type
+            typeMatchResult = {
+                matched_type: userPackages.find(p => p.name === 'generic'),
+                confidence: 1.0,
+                reason: 'Type determination failed, using generic fallback'
+            };
         }
 
-        const response = await fetch(apiEndpoint, {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify(requestBody)
-        });
+        const matchedType = typeMatchResult.matched_type || userPackages.find(p => p.name === 'generic');
+        const packageName = matchedType.name;
+        const typeIntent = matchedType.intent;
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            console.warn('Classification API error:', errorData);
-            throw new Error(errorData.error?.message || 'Classification failed');
+        // Step 2: Full classification using the matched type
+        const classificationPrompt = `You are an expert email classifier. Analyze the ${platform === 'linkedin' ? 'message' : 'email'} context and return ONLY a JSON object with:
+{
+  "type": "${packageName}",
+  "intent": Determine the sender's primary intent from the recipient's perspective. CRITICAL: Base the intent DIRECTLY on the matched type's intent context and the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below). The matched type intent context is: "${typeIntent}". Use this as guidance to determine the specific intent for this email. The intent should be specific, natural, and contextual, reflecting what the sender is trying to achieve in THAT SPECIFIC EMAIL. PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO - use thread history only for background understanding. IGNORE thread history when determining intent.
+  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. CRITICAL: Base these DIRECTLY on the detected type, the detected intent, and the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below). The goals must be type-appropriate and reflect realistic response options for that specific type of email. Consider what responses make sense for this type of communication. Be nuanced, realistic, and contextually relevant. PRIORITIZE responding to the SPECIFIC EMAIL BEING REPLIED TO - ignore thread history when determining goals.
+  "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label. Keep titles concise and action-oriented. The title should capture the essence of the goal.
+  "tone_needed": Determine the single most appropriate tone for the reply. CRITICAL: Base this DIRECTLY on the detected type, the detected intent, and the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below). The tone must be type-appropriate. Consider what tone is most suitable for responding to this type of email. Be nuanced and realistic. PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO's tone and context - ignore thread history when determining tone.
+  "tone_sets": Object with keys matching response_goals, each containing array of suggested ranked tone strings. CRITICAL: Base these DIRECTLY on the detected type, the specific response_goal, and the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below). Each tone must be type-appropriate and goal-appropriate. Consider what tones make sense for this type of email and this specific goal. Rank them by relevance. IGNORE thread history when determining tones.
+  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance. CRITICAL: Base these DIRECTLY on the detected type, the specific response_goal, and the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below). Each variant label must be type-appropriate and goal-appropriate. Consider what response variants make sense for this type of email and this specific goal. Make them descriptive and action-oriented. IGNORE thread history when determining variants.
+  "recipient_name": string (the name of the person who SENT the email being replied to - extract this from the "EMAIL BEING REPLIED TO" section, NOT from thread history),
+  "recipient_company": string or null (the company of the person who SENT the email being replied to),
+  "key_topics": array of strings (max 5, based on the SPECIFIC EMAIL BEING REPLIED TO, not the thread)
+}
+
+CRITICAL INSTRUCTIONS:
+1. The type has been determined as "${packageName}" based on package matching. Use this type value.
+2. Base the "intent" DIRECTLY on the matched type's intent context ("${typeIntent}") AND the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below) to determine the specific intent for this email. PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO - use thread history only for background understanding. IGNORE thread history when determining intent.
+3. Base "response_goals" DIRECTLY on what the sender is specifically asking, requesting, or doing in the SPECIFIC EMAIL BEING REPLIED TO. Look at the actual questions, requests, or statements in that email. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X" or similar, NOT "Express interest" (which would be for the initial offer). The goals must directly address what the sender is asking for in THAT SPECIFIC EMAIL. IGNORE thread history completely when determining goals.
+4. Base "recipient_name" on the person who SENT the SPECIFIC EMAIL BEING REPLIED TO. Extract the sender's name from the "EMAIL BEING REPLIED TO" section. DO NOT use names from thread history. ${actualSenderName ? `The sender's name should be "${actualSenderName}" - use this value for recipient_name.` : 'Extract the sender\'s name from the email header or content.'}
+5. Base ALL other fields (tone_needed, tone_sets, variant_sets) DIRECTLY on the detected type, the detected intent, and the SPECIFIC EMAIL BEING REPLIED TO. PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO's content and intent. IGNORE thread history when determining these fields.
+6. The type should STRONGLY influence everything - make intent type-appropriate, goals type-appropriate, tones type-appropriate, and variants type-appropriate.
+7. Be highly context-specific, nuanced, and realistic. Base everything on the SPECIFIC EMAIL BEING REPLIED TO's content, relationship, and situation. The thread history is provided ONLY for background context - DO NOT use it to determine goals, tones, variants, or recipient_name.
+8. Return ONLY valid JSON, no other text.`;
+
+        const messages = [
+            {
+                role: 'system',
+                content: classificationPrompt
+            },
+            {
+                role: 'user',
+                content: `=== EMAIL BEING REPLIED TO (USE THIS FOR CLASSIFICATION - IGNORE THREAD HISTORY BELOW) ===
+${emailBeingRepliedTo}
+
+${previousThreadHistory ? `=== PREVIOUS THREAD HISTORY (IGNORE FOR CLASSIFICATION - BACKGROUND ONLY) ===
+${previousThreadHistory}
+
+REMINDER: Classify based on the SPECIFIC EMAIL BEING REPLIED TO above. 
+- Determine intent based on what the sender is doing in THAT SPECIFIC EMAIL.
+- Determine goals based on what the sender is SPECIFICALLY asking or requesting in THAT SPECIFIC EMAIL (e.g., if they ask "Did you receive X?", the goal should be about confirming receipt, NOT expressing general interest).
+- Extract recipient_name from the sender of THAT SPECIFIC EMAIL (${actualSenderName ? `should be "${actualSenderName}"` : 'extract from email header'}).
+- The thread history is only for background context, NOT for determining the classification. 
+- IGNORE the thread history completely when determining goals, recipient_name, and other fields.
+
+` : ''}${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
+            }
+        ];
+
+        let data;
+        try {
+            data = await callProxyAPI(
+                apiConfig.provider,
+                classificationModel,
+                messages,
+                0.3,  // temperature
+                2000  // max_tokens - increased to ensure complete JSON responses for complex classifications
+            );
+        } catch (fetchError) {
+            // Handle network errors (CORS, connection issues, etc.)
+            const networkError = fetchError.message || String(fetchError);
+            console.error('Network error during classification API call:', networkError);
+            if (networkError.includes('Failed to fetch') || networkError.includes('NetworkError')) {
+                throw new Error(`Network error: Unable to connect to ${apiConfig.provider} API. Please check:\n1. Your internet connection\n2. CORS settings (if testing locally)\n3. API endpoint is accessible\n\nError: ${networkError}`);
+            }
+            throw new Error(`Network error: ${networkError}`);
         }
-
-        const data = await response.json();
         let content = data.choices?.[0]?.message?.content || '{}';
 
         // Clean up content - remove markdown code blocks if present
@@ -242,20 +727,75 @@ Be highly context-specific for intent, goals, tones, and variants. Base everythi
             fixedContent = fixedContent.substring(0, lastValidChar + 1);
         }
 
-        // Step 2: Close incomplete arrays
+        // Step 2: Fix common pattern where array closes with } instead of ]
+        // Pattern: ["item1", "item2" } should be ["item1", "item2"] }
+        // This must happen BEFORE we calculate depths
+
+        // First, count brackets to see if we have unclosed arrays
         let openBrackets = (fixedContent.match(/\[/g) || []).length;
         let closeBrackets = (fixedContent.match(/\]/g) || []).length;
-        while (openBrackets > closeBrackets) {
-            fixedContent = fixedContent.trim().replace(/,\s*$/, '') + ']';
-            closeBrackets++;
+
+        if (openBrackets > closeBrackets) {
+            // We have unclosed arrays - fix patterns where arrays close with } instead of ]
+            // Pattern 1: Direct array content followed by }
+            // ["item1", "item2" } -> ["item1", "item2"] }
+            fixedContent = fixedContent.replace(/(\[[^\]]*"[^"]*"(?:\s*,\s*"[^"]*")*)\s*\}\s*([,}])/g, '$1]$2');
+
+            // Pattern 2: More aggressive - find "text" } patterns and fix them if we're in array context
+            // This handles: "Keep door open" } -> "Keep door open"] }
+            // We'll do a simple replacement: if we have unclosed brackets, replace "text" } with "text"] }
+            // But only if the } is followed by , or } (indicating it's closing a structure)
+            fixedContent = fixedContent.replace(/"([^"]*)"\s*\}\s*([,}])/g, (match, text, after, offset) => {
+                // Check if we're likely in an array by counting brackets before this position
+                const before = fixedContent.substring(0, offset);
+                const openBefore = (before.match(/\[/g) || []).length;
+                const closeBefore = (before.match(/\]/g) || []).length;
+                // If we have more open brackets than close brackets, we're in an array
+                if (openBefore > closeBefore) {
+                    return `"${text}"]${after}`;
+                }
+                return match;
+            });
         }
 
-        // Step 3: Close incomplete objects
-        let openBraces = (fixedContent.match(/\{/g) || []).length;
-        let closeBraces = (fixedContent.match(/\}/g) || []).length;
-        while (openBraces > closeBraces) {
+        // Step 3: Close incomplete structures (arrays first, then objects)
+        // Track depth to properly close nested structures
+        let bracketDepth = 0;
+        let braceDepth = 0;
+        // Reset string tracking for depth calculation
+        inString = false;
+        escapeNext = false;
+
+        for (let i = 0; i < fixedContent.length; i++) {
+            const char = fixedContent[i];
+            if (escapeNext) {
+                escapeNext = false;
+                continue;
+            }
+            if (char === '\\') {
+                escapeNext = true;
+                continue;
+            }
+            if (char === '"') {
+                inString = !inString;
+            } else if (!inString) {
+                if (char === '[') bracketDepth++;
+                else if (char === ']') bracketDepth--;
+                else if (char === '{') braceDepth++;
+                else if (char === '}') braceDepth--;
+            }
+        }
+
+        // Close arrays first (they're nested inside objects)
+        while (bracketDepth > 0) {
+            fixedContent = fixedContent.trim().replace(/,\s*$/, '') + ']';
+            bracketDepth--;
+        }
+
+        // Then close objects
+        while (braceDepth > 0) {
             fixedContent = fixedContent.trim().replace(/,\s*$/, '') + '}';
-            closeBraces++;
+            braceDepth--;
         }
 
         // Step 4: Remove trailing commas before closing braces/brackets
@@ -318,7 +858,7 @@ Be highly context-specific for intent, goals, tones, and variants. Base everythi
                 : (classification.tone_needed || 'professional');
 
             return {
-                type: classification.type || 'other',
+                type: classification.type || packageName || 'generic',
                 intent: classification.intent || 'general inquiry',
                 response_goals: response_goals,
                 goal_titles: goal_titles,
@@ -327,7 +867,8 @@ Be highly context-specific for intent, goals, tones, and variants. Base everythi
                 variant_sets: variant_sets,
                 recipient_name: classification.recipient_name || richContext.recipientName || '',
                 recipient_company: classification.recipient_company || richContext.recipientCompany || null,
-                key_topics: classification.key_topics || []
+                key_topics: classification.key_topics || [],
+                writing_style: currentStyleProfile // Include style profile for generation
             };
         } catch (parseError) {
             console.warn('Failed to parse classification JSON:', parseError);
@@ -413,7 +954,7 @@ Be highly context-specific for intent, goals, tones, and variants. Base everythi
                         : (classification.tone_needed || 'professional');
 
                     return {
-                        type: classification.type || 'other',
+                        type: classification.type || packageName || 'generic',
                         intent: classification.intent || 'general inquiry',
                         response_goals: response_goals,
                         goal_titles: goal_titles,
@@ -422,7 +963,8 @@ Be highly context-specific for intent, goals, tones, and variants. Base everythi
                         variant_sets: variant_sets,
                         recipient_name: classification.recipient_name || richContext.recipientName || '',
                         recipient_company: classification.recipient_company || richContext.recipientCompany || null,
-                        key_topics: classification.key_topics || []
+                        key_topics: classification.key_topics || [],
+                        writing_style: currentStyleProfile // Include style profile for generation
                     };
                 } else {
                     throw new Error('No complete JSON object found');
@@ -446,13 +988,21 @@ Be highly context-specific for intent, goals, tones, and variants. Base everythi
                     },
                     recipient_name: richContext.recipientName || '',
                     recipient_company: richContext.recipientCompany || null,
-                    key_topics: []
+                    key_topics: [],
+                    writing_style: currentStyleProfile
                 };
             }
         }
     } catch (error) {
-        console.warn('Email classification error:', error);
+        const errorMessage = error?.message || String(error) || 'Unknown error';
+        console.warn('Email classification error:', JSON.stringify({
+            message: errorMessage,
+            error: error?.toString(),
+            stack: error?.stack
+        }, null, 2));
         // Return safe defaults
+        // Load style profile for fallback
+        const fallbackStyleProfile = await loadStyleProfile().catch(() => defaultStyleProfile);
         return {
             type: 'other',
             intent: 'general inquiry',
@@ -470,7 +1020,8 @@ Be highly context-specific for intent, goals, tones, and variants. Base everythi
             },
             recipient_name: richContext.recipientName || '',
             recipient_company: richContext.recipientCompany || null,
-            key_topics: []
+            key_topics: [],
+            writing_style: fallbackStyleProfile
         };
     }
 };
@@ -571,7 +1122,85 @@ const platformAdapters = {
                 .filter(div => div.getAttribute('role') !== 'textbox');
             return allMessageDivs.length > 0 || subjectValue.toLowerCase().startsWith('re:');
         },
-        // Get thread messages for context
+        // Get the ACTUAL email being replied to (not the latest, but the specific one the user clicked "Reply" on)
+        getEmailBeingRepliedTo: () => {
+            const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
+            if (!composeBody) return null;
+
+            // Find the message div that's immediately before/above the compose box
+            // This is the email the user is actually replying to
+            let currentElement = composeBody.previousElementSibling;
+            let messageDiv = null;
+
+            // Walk backwards from compose box to find the closest message div
+            while (currentElement && !messageDiv) {
+                // Check if this element or its children contain a message body
+                const messageBody = currentElement.querySelector('div[aria-label="Message Body"]:not([role="textbox"])')
+                    || (currentElement.getAttribute('aria-label') === 'Message Body' && currentElement.getAttribute('role') !== 'textbox' ? currentElement : null);
+
+                if (messageBody) {
+                    messageDiv = messageBody;
+                    break;
+                }
+
+                // Also check if this element itself is a message body
+                if (currentElement.getAttribute('aria-label') === 'Message Body' &&
+                    currentElement.getAttribute('role') !== 'textbox') {
+                    messageDiv = currentElement;
+                    break;
+                }
+
+                currentElement = currentElement.previousElementSibling;
+            }
+
+            // If not found by walking backwards, try finding the closest message div in the parent
+            if (!messageDiv) {
+                const parent = composeBody.parentElement;
+                if (parent) {
+                    // Get all message divs and find the one closest to the compose box
+                    const allMessageDivs = Array.from(parent.querySelectorAll('div[aria-label="Message Body"]'))
+                        .filter(div => div.getAttribute('role') !== 'textbox');
+
+                    // Find the one that appears before the compose box in the DOM
+                    for (let i = 0; i < allMessageDivs.length; i++) {
+                        if (allMessageDivs[i].compareDocumentPosition(composeBody) & Node.DOCUMENT_POSITION_FOLLOWING) {
+                            messageDiv = allMessageDivs[i];
+                            break;
+                        }
+                    }
+
+                    // If still not found, use the last message div before compose box position
+                    if (!messageDiv && allMessageDivs.length > 0) {
+                        // Find which message div is closest to compose box
+                        let closestDiv = null;
+                        let closestDistance = Infinity;
+                        const composeRect = composeBody.getBoundingClientRect();
+
+                        for (const div of allMessageDivs) {
+                            const divRect = div.getBoundingClientRect();
+                            // Check if this div is above the compose box
+                            if (divRect.bottom <= composeRect.top) {
+                                const distance = composeRect.top - divRect.bottom;
+                                if (distance < closestDistance) {
+                                    closestDistance = distance;
+                                    closestDiv = div;
+                                }
+                            }
+                        }
+
+                        if (closestDiv) {
+                            messageDiv = closestDiv;
+                        } else {
+                            // Fallback: use the last message div
+                            messageDiv = allMessageDivs[allMessageDivs.length - 1];
+                        }
+                    }
+                }
+            }
+
+            return messageDiv;
+        },
+        // Get thread messages for context (all messages except the one being replied to)
         getThreadMessages: () => {
             const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
             const composeText = composeBody?.innerText?.trim() || '';
@@ -581,9 +1210,276 @@ const platformAdapters = {
                 });
             return allMessageDivs
                 .map(div => div.innerText.trim())
-                .filter(text => text && !text.includes('Generate') && !text.includes('Respond'));
+                .filter(text => text && text.length > 0 && !text.includes('Generate') && !text.includes('Respond'));
         },
-        // Get sender name from email - scoped to the current email thread only
+        // Get detailed information about the email being replied to
+        getRepliedToEmailDetails: () => {
+            // Subject - always the compose input (includes "Re:" for replies)
+            const subjectInput = document.querySelector('input[aria-label="Subject"], input[name="subjectbox"]');
+            const subject = subjectInput ? subjectInput.value : '';
+
+            // Sender of the replied-to message - look for the header above the quote (name and email)
+            // Try multiple selectors to find the sender header
+            let senderHeader = document.querySelector('div.iw, h3.iw, div.quoted_text ~ div.iw');
+
+            // If not found, try to find it near the quoted content
+            if (!senderHeader) {
+                const quotedBodyElement = document.querySelector('div.gmail_quote, blockquote.gmail_quote');
+                if (quotedBodyElement) {
+                    // Look for header elements before the quote
+                    let currentElement = quotedBodyElement.previousElementSibling;
+                    while (currentElement && !senderHeader) {
+                        if (currentElement.classList.contains('iw') ||
+                            currentElement.querySelector('span[name], span[email]')) {
+                            senderHeader = currentElement;
+                            break;
+                        }
+                        currentElement = currentElement.previousElementSibling;
+                    }
+                }
+            }
+
+            // Also try finding sender info from the email being replied to div
+            if (!senderHeader) {
+                const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
+                if (emailBeingRepliedTo) {
+                    const container = emailBeingRepliedTo.closest('[role="listitem"]') || emailBeingRepliedTo.parentElement;
+                    if (container) {
+                        senderHeader = container.querySelector('div.iw, h3.iw, span[name], span[email]')?.closest('div') ||
+                            container.querySelector('span[name], span[email]')?.parentElement;
+                    }
+                }
+            }
+
+            let senderName = '';
+            let senderEmail = '';
+
+            if (senderHeader) {
+                // Try to get name from span[name] attribute
+                const nameSpan = senderHeader.querySelector('span[name]');
+                if (nameSpan) {
+                    senderName = nameSpan.getAttribute('name') || '';
+                }
+
+                // Try to get email from span[email] attribute
+                const emailSpan = senderHeader.querySelector('span[email]');
+                if (emailSpan) {
+                    senderEmail = emailSpan.getAttribute('email') || '';
+                }
+
+                // If name not found, try extracting from text content
+                if (!senderName) {
+                    const text = senderHeader.innerText || senderHeader.textContent || '';
+                    // Look for patterns like "Name <email@domain.com>" or "Name (Company)"
+                    const nameMatch = text.match(/^([^<\(]+?)(?:\s*<|$)/);
+                    if (nameMatch) {
+                        senderName = nameMatch[1].trim();
+                    } else {
+                        senderName = text.trim();
+                    }
+                }
+            }
+
+            // Body of the replied-to message - the quoted content
+            const quotedBodyElement = document.querySelector('div.gmail_quote, blockquote.gmail_quote');
+            let body = '';
+            if (quotedBodyElement) {
+                body = quotedBodyElement.innerText?.trim() || quotedBodyElement.textContent?.trim() || '';
+            } else {
+                // Fallback: get body from the email being replied to div
+                const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
+                if (emailBeingRepliedTo) {
+                    body = emailBeingRepliedTo.innerText?.trim() || emailBeingRepliedTo.textContent?.trim() || '';
+                }
+            }
+
+            // Recipients (To/CC) of the replied-to message
+            // For replies, Gmail pre-fills the compose fields with the original sender
+            // The "To" field contains the person you're replying to (the sender of the original email)
+            const toInput = document.querySelector('input[aria-label="To recipients"], input[name="to"], input[aria-label="To"]');
+            const toRecipients = toInput ? toInput.value : '';
+
+            const ccInput = document.querySelector('input[name="cc"], input[aria-label="Cc"]');
+            const ccRecipients = ccInput ? ccInput.value : '';
+
+            return {
+                subject,
+                senderName: senderName || '',
+                senderEmail: senderEmail || '',
+                body: body || '',
+                to: toRecipients || '',
+                cc: ccRecipients || ''
+            };
+        },
+        // Get sender name from the ACTUAL email being replied to (not latest, but the specific one)
+        // This is critical for threads where different people send emails and you might reply to a middle email
+        getEmailBeingRepliedToSenderName: () => {
+            // Get the actual email being replied to (the one above the compose box)
+            // Use platformAdapters.gmail since we're inside the gmail adapter object
+            const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
+            if (!emailBeingRepliedTo) return null;
+
+            // Find the container for this specific message - look for the listitem that contains this message
+            let messageContainer = emailBeingRepliedTo.closest('[role="listitem"]');
+            if (!messageContainer) {
+                // Fallback: look for parent containers
+                messageContainer = emailBeingRepliedTo.closest('.nH, .aDP, [role="main"]') || emailBeingRepliedTo.parentElement;
+            }
+
+            if (!messageContainer) return null;
+
+            // Method 1: Look for span elements with email attribute in this message container ONLY
+            // Prioritize elements that are closest to the email being replied to
+            const senderSpans = Array.from(messageContainer.querySelectorAll('span[email][name]'))
+                .filter(span => messageContainer.contains(span))
+                .sort((a, b) => {
+                    // Prefer spans that are closer to the email being replied to
+                    const aDist = Math.abs(a.compareDocumentPosition(emailBeingRepliedTo));
+                    const bDist = Math.abs(b.compareDocumentPosition(emailBeingRepliedTo));
+                    return aDist - bDist;
+                });
+
+            for (const span of senderSpans) {
+                const name = span.getAttribute('name');
+                if (name && name.length > 0 && !name.includes('@') && name.length < 100) {
+                    if (!['Google', 'Gmail', 'LinkedIn', 'Notification', 'LinkedIn Notifications'].includes(name)) {
+                        // Verify this span is associated with the latest message (not an earlier one)
+                        // Check if it's in the same listitem or close to the latest message
+                        const spanContainer = span.closest('[role="listitem"]');
+                        if (!spanContainer || spanContainer === messageContainer || messageContainer.contains(span)) {
+                            return name.trim();
+                        }
+                    }
+                }
+            }
+
+            // Method 2: Look for email header metadata in the message container
+            // Gmail shows sender info in a header above the message body
+            // Look for the header that's immediately before the email being replied to
+            let headerBeforeMessage = null;
+            let currentElement = emailBeingRepliedTo.previousElementSibling;
+            while (currentElement && !headerBeforeMessage) {
+                const text = currentElement.textContent || '';
+                // Check if this looks like an email header (contains date, "to me", email pattern, etc.)
+                if (text.match(/\d{1,2}[:\/]\d{1,2}/) || text.match(/to me/i) || text.match(/@.*\.com/i)) {
+                    headerBeforeMessage = currentElement;
+                    break;
+                }
+                currentElement = currentElement.previousElementSibling;
+            }
+
+            // Also check parent's previous siblings
+            if (!headerBeforeMessage) {
+                const parent = emailBeingRepliedTo.parentElement;
+                if (parent) {
+                    currentElement = parent.previousElementSibling;
+                    while (currentElement && !headerBeforeMessage) {
+                        const text = currentElement.textContent || '';
+                        if (text.match(/\d{1,2}[:\/]\d{1,2}/) || text.match(/to me/i) || text.match(/@.*\.com/i)) {
+                            headerBeforeMessage = currentElement;
+                            break;
+                        }
+                        currentElement = currentElement.previousElementSibling;
+                    }
+                }
+            }
+
+            // Search in header elements and the message container
+            const searchElements = headerBeforeMessage
+                ? [headerBeforeMessage, ...Array.from(messageContainer.querySelectorAll('div, span'))]
+                : Array.from(messageContainer.querySelectorAll('div, span'));
+
+            for (const header of searchElements) {
+                if (!messageContainer.contains(header) && header !== headerBeforeMessage) continue;
+                const text = header.textContent || '';
+                // Look for patterns like "Jagoe, Rusty (CGI Federal)" or "Rusty Jagoe"
+                // Pattern: "Last, First (Company) <email>" - this is the Gmail format
+                const namePatterns = [
+                    /([A-Z][a-z]+,\s+[A-Z][a-z]+(?:\s+\([^)]+\))?)\s*</i,  // "Jagoe, Rusty (CGI Federal) <"
+                    /([A-Z][a-z]+,\s+[A-Z][a-z]+)/,                          // "Jagoe, Rusty"
+                    /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*\(/i,                // "Rusty Jagoe (Company)"
+                    /From:\s*([^<\n]+?)\s*</i,                                // "From: Name <"
+                ];
+
+                for (const pattern of namePatterns) {
+                    const match = text.match(pattern);
+                    if (match && match[1]) {
+                        let name = match[1].trim();
+                        // Remove company name in parentheses if present
+                        name = name.replace(/\s*\([^)]+\)\s*$/, '');
+                        // Handle "Last, First" format - convert to "First Last"
+                        if (name.includes(',')) {
+                            const parts = name.split(',').map(p => p.trim());
+                            if (parts.length === 2) {
+                                name = `${parts[1]} ${parts[0]}`; // Convert "Jagoe, Rusty" to "Rusty Jagoe"
+                            }
+                        }
+                        if (name && name.length > 2 && name.length < 100 && !name.includes('@') &&
+                            !name.match(/^\d+$/) &&
+                            !['Google', 'Gmail', 'LinkedIn', 'Notification', 'LinkedIn Notifications'].includes(name)) {
+                            return name;
+                        }
+                    }
+                }
+            }
+
+            // Method 3: Look for elements with email attribute in this message container
+            const emailElements = Array.from(messageContainer.querySelectorAll('[email]'))
+                .filter(elem => messageContainer.contains(elem))
+                .sort((a, b) => {
+                    const aDist = Math.abs(a.compareDocumentPosition(latestMessageDiv));
+                    const bDist = Math.abs(b.compareDocumentPosition(latestMessageDiv));
+                    return aDist - bDist;
+                });
+
+            for (const elem of emailElements) {
+                const name = elem.getAttribute('name') || elem.textContent?.trim();
+                if (name && name.length > 0 && !name.includes('@') && name.length < 100 && name.length > 1) {
+                    if (!name.match(/^[^\s]+@[^\s]+\.[^\s]+$/) &&
+                        !['Google', 'Gmail', 'LinkedIn', 'Notification', 'LinkedIn Notifications'].includes(name)) {
+                        const elemContainer = elem.closest('[role="listitem"]');
+                        if (!elemContainer || elemContainer === messageContainer || messageContainer.contains(elem)) {
+                            return name.trim();
+                        }
+                    }
+                }
+            }
+
+            // Method 4: Look for "From: Name <email>" pattern in this message container's text
+            const containerText = messageContainer.textContent || '';
+            const patterns = [
+                /From:\s*([^<\n]+?)\s*</i,
+                /^([^<\n@]+?)\s*<[^>]+@[^>]+>/m,
+                /([A-Z][a-z]+\s+[A-Z][a-z]+)\s*<[^>]+@/,
+                /([A-Z][a-z]+\s+[A-Z]\.?)\s*<[^>]+@/
+            ];
+
+            for (const pattern of patterns) {
+                const match = containerText.match(pattern);
+                if (match && match[1]) {
+                    let name = match[1].trim();
+                    // Handle "Last, First" format
+                    if (name.includes(',')) {
+                        const parts = name.split(',').map(p => p.trim());
+                        if (parts.length === 2) {
+                            name = `${parts[1]} ${parts[0]}`;
+                        }
+                    }
+                    if (name && name.length > 2 && name.length < 100 && !name.includes('@') &&
+                        !name.match(/^\d+$/) &&
+                        !['Google', 'Gmail', 'LinkedIn', 'Notification', 'LinkedIn Notifications'].includes(name)) {
+                        return name;
+                    }
+                }
+            }
+
+            return null;
+        },
+        // Legacy method - kept for compatibility but should use getEmailBeingRepliedToSenderName instead
+        getLatestEmailSenderName: () => {
+            return platformAdapters.gmail.getEmailBeingRepliedToSenderName ? platformAdapters.gmail.getEmailBeingRepliedToSenderName() : null;
+        },
+        // Get sender name from email - scoped to the current email thread only (legacy method, kept for compatibility)
         getSenderName: () => {
             // First, find the compose/reply window container to scope our search
             const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
@@ -852,12 +1748,12 @@ const createIconOnlyButton = (buttonTooltip, platform) => {
             iconImg.src = iconUrl;
             iconImg.alt = 'ResponseAble';
             iconImg.style.cssText = 'width: 20px !important; height: 20px !important; max-width: 20px !important; max-height: 20px !important; display: inline-block !important; vertical-align: middle !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important; position: relative !important;';
-            iconImg.onerror = (e) => {
+            iconImg.addEventListener('error', (e) => {
                 console.error('Failed to load raiconvector.png from:', iconUrl, e);
-            };
-            iconImg.onload = () => {
+            });
+            iconImg.addEventListener('load', () => {
                 console.log('Successfully loaded raiconvector.png for comment button');
-            };
+            });
             generateButton.appendChild(iconImg);
         } catch (error) {
             // Handle extension context errors
@@ -901,9 +1797,9 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
             if (platform === 'linkedin') {
                 iconImg.style.cssText = 'width: 16px !important; height: 16px !important; max-width: 16px !important; max-height: 16px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
             } else {
-                iconImg.style.cssText = 'width: 20px !important; height: 20px !important; max-width: 20px !important; max-height: 20px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
+                iconImg.style.cssText = 'width: 28px !important; height: 28px !important; max-width: 28px !important; max-height: 28px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
             }
-            iconImg.onerror = () => console.error('Failed to load raicon20x20.png from:', iconImg.src);
+            iconImg.addEventListener('error', () => console.error('Failed to load raicon20x20.png from:', iconImg.src));
             generateButton.appendChild(iconImg);
         } catch (error) {
             console.error('Error loading icon:', error);
@@ -920,7 +1816,7 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
         generateButton.style.cssText = 'display: inline !important; align-items: center !important; padding: 4px 12px !important; margin: 0 8px 0 4px !important; border-radius: 16px !important; background: #D3E3FD !important; color: #444746 !important; border: none !important; cursor: pointer !important; font-size: 14px !important; font-weight: 600 !important; height: 28px !important; line-height: 20px !important; min-width: auto !important;';
     } else {
         // Gmail style: original styling
-        generateButton.style.cssText = 'display: inline-flex !important; align-items: center !important; padding: 6px 12px !important; margin: 0 1px !important; border-radius: 0px !important; background: #D3E3FD !important; color: #444746 !important; border: none !important; cursor: pointer !important; font-size: 14px !important;';
+        generateButton.style.cssText = 'display: inline-flex !important; align-items: center !important; padding: 0px 12px 0px 3px !important; !important; margin: 0 1px !important; border-radius: 0px !important; background: #D3E3FD !important; color: #444746 !important; border: none !important; cursor: pointer !important; font-size: 14px !important;';
     }
 
     return generateButton;
@@ -955,42 +1851,118 @@ const injectGenerateButton = () => {
         const toolbar = sendButton.parentElement;
         if (!toolbar || toolbar.querySelector('.responseable-button')) return;
 
-        const isReply = adapter.isReply();
-        const buttonText = isReply ? 'Respond' : 'Generate';
-        const buttonTooltip = isReply ? 'Generate AI response options' : 'Generate AI message drafts';
-        const buttonClass = isReply ? 'responseable-respond' : 'responseable-generate';
+        const generateButton = createButton('Generate', 'Generate AI message drafts', 'responseable-generate', platform);
 
-        const generateButton = createButton(buttonText, buttonTooltip, buttonClass, platform);
-
-        generateButton.onclick = async () => {
-            const currentButtonText = buttonText;
+        generateButton.addEventListener('click', async () => {
+            const currentButtonText = 'Generate';
             // Get context for API call using enhanced context extraction
             const richContext = getRichContext();
-            const threadMessages = adapter.getThreadMessages();
-            const sourceMessageText = threadMessages.length > 0 ? threadMessages[threadMessages.length - 1] : '';
+
+            // CRITICAL: Get detailed information about the email being replied to
+            // Call getRepliedToEmailDetails first to determine if this is a reply
+            let emailDetails = null;
+            let sourceMessageText = '';
+            let actualSenderName = null;
+            let actualSenderEmail = null;
+            let emailSubject = '';
+            let toRecipients = '';
+            let ccRecipients = '';
+            let isReply = false;
+
+            if (adapter.getRepliedToEmailDetails) {
+                emailDetails = adapter.getRepliedToEmailDetails();
+                if (emailDetails) {
+                    // Determine if it's a reply based on whether we got meaningful data
+                    // A reply should have either a senderName or a body (quoted content)
+                    isReply = !!(emailDetails.senderName || emailDetails.body);
+
+                    if (isReply) {
+                        sourceMessageText = emailDetails.body || '';
+                        actualSenderName = emailDetails.senderName || null;
+                        actualSenderEmail = emailDetails.senderEmail || null;
+                        emailSubject = emailDetails.subject || '';
+                        toRecipients = emailDetails.to || '';
+                        ccRecipients = emailDetails.cc || '';
+                    }
+                }
+            }
+
+            // Fallback: if getRepliedToEmailDetails didn't work or didn't detect a reply, use isReply() method
+            if (!isReply && adapter.isReply) {
+                isReply = adapter.isReply();
+            }
+
+            // Update button text and class based on whether it's a reply
+            if (isReply) {
+                generateButton.innerHTML = 'Respond';
+                generateButton.className = 'responseable-respond responseable-button' + (platform === 'linkedin' ? ' responseable-linkedin-button' : '');
+                generateButton.setAttribute('data-tooltip', 'Generate AI response options');
+            }
+
+            // Fallback: if getRepliedToEmailDetails didn't work or didn't return body, use the old method
+            if (isReply && !sourceMessageText) {
+                const emailBeingRepliedTo = adapter.getEmailBeingRepliedTo
+                    ? adapter.getEmailBeingRepliedTo()
+                    : null;
+
+                if (emailBeingRepliedTo) {
+                    sourceMessageText = emailBeingRepliedTo.innerText?.trim() || emailBeingRepliedTo.textContent?.trim() || '';
+                } else {
+                    // Fallback: if we can't find the specific email, use the latest one
+                    const threadMessages = adapter.getThreadMessages();
+                    sourceMessageText = threadMessages.length > 0 ? threadMessages[threadMessages.length - 1] : '';
+                }
+            }
+
+            // Get all thread messages for context (excluding the one being replied to)
+            const allThreadMessages = adapter.getThreadMessages();
+            // Remove the email being replied to from thread history (if it's in there)
+            const threadHistory = allThreadMessages.filter(msg => {
+                // Don't include the email being replied to in the thread history
+                if (sourceMessageText) {
+                    return msg !== sourceMessageText && !sourceMessageText.includes(msg) && !msg.includes(sourceMessageText);
+                }
+                return true;
+            });
+
+            // Convert thread history array to text string
+            const threadHistoryText = threadHistory.length > 0
+                ? threadHistory.reverse().join('\n\n---\n\n')
+                : '';
 
             // Use rich context for the prompt
             const context = richContext.fullContext;
             const recipientName = richContext.recipientName;
             const recipientCompany = richContext.recipientCompany;
 
-            // Get sender name if replying (fallback to recipientName from rich context)
-            const senderName = isReply ? (adapter.getSenderName() || recipientName) : null;
+            // Get sender name from the ACTUAL email being replied to (not latest, not original)
+            // Prefer the sender name from emailDetails if available, otherwise fall back to other methods
+            const senderName = isReply
+                ? (actualSenderName || (adapter.getEmailBeingRepliedToSenderName ? adapter.getEmailBeingRepliedToSenderName() : (adapter.getLatestEmailSenderName ? adapter.getLatestEmailSenderName() : adapter.getSenderName()))) || recipientName
+                : null;
 
             // Step 1: Classify email using AI
+            // Pass senderName so classification can use it for recipient_name (the person you're replying to)
             generateButton.innerHTML = 'Analyzing...';
             generateButton.style.opacity = '0.7';
 
-            const classification = await classifyEmail(richContext, sourceMessageText, platform);
+            const classification = await classifyEmail(richContext, sourceMessageText, platform, threadHistoryText, senderName);
 
             generateButton.innerHTML = 'Generating...';
 
             // Store context needed for regeneration
+            // threadHistory excludes the email being replied to (for context only)
             const regenerateContext = {
                 richContext,
-                sourceMessageText,
+                sourceMessageText,  // The actual email being replied to
+                threadHistory: threadHistoryText,  // All other emails in thread (context only)
                 context,
                 senderName,
+                senderEmail: actualSenderEmail,  // Sender email from emailDetails
+                emailSubject: emailSubject,  // Subject of the email being replied to
+                toRecipients: toRecipients,  // To recipients
+                ccRecipients: ccRecipients,  // CC recipients
+                emailDetails: emailDetails,  // Full email details (subject, senderName, senderEmail, body, to, cc)
                 recipientName,
                 recipientCompany
             };
@@ -1009,7 +1981,8 @@ const injectGenerateButton = () => {
                     adapter,
                     (draftsText) => {
                         showDraftsOverlay(draftsText, context, platform, null, classification, regenerateContext);
-                    }
+                    },
+                    regenerateContext  // Pass regenerateContext so function can access threadHistory
                 );
             } catch (err) {
                 alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
@@ -1026,7 +1999,7 @@ const injectGenerateButton = () => {
                         if (platform === 'linkedin') {
                             iconImg.style.cssText = 'width: 16px !important; height: 16px !important; max-width: 16px !important; max-height: 16px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
                         } else {
-                            iconImg.style.cssText = 'width: 20px !important; height: 20px !important; max-width: 20px !important; max-height: 20px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
+                            iconImg.style.cssText = 'width: 28px !important; height: 28px !important; max-width: 28px !important; max-height: 28 px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
                         }
                         generateButton.appendChild(iconImg);
                     } catch (error) {
@@ -1049,7 +2022,7 @@ const injectGenerateButton = () => {
                     generateButton.style.alignSelf = 'center';
                 }
             }
-        };
+        });
 
         // Insert button before send button
         toolbar.insertBefore(generateButton, sendButton.nextSibling);
@@ -1058,14 +2031,9 @@ const injectGenerateButton = () => {
 
 // Simple overlay to show drafts
 // Function to generate drafts with a specific tone
-const generateDraftsWithTone = async (richContext, sourceMessageText, platform, classification, selectedTone, senderName, recipientName, recipientCompany, adapter, onComplete) => {
+const generateDraftsWithTone = async (richContext, sourceMessageText, platform, classification, selectedTone, senderName, recipientName, recipientCompany, adapter, onComplete, regenerateContext = null) => {
     try {
         await loadApiConfig();
-        const apiKey = getApiKey(apiConfig.provider);
-        if (!apiKey) {
-            alert(`API key not configured for ${apiConfig.provider}. Please contact the extension developer.`);
-            return;
-        }
 
         // Get the primary goal and its variants/tone
         // Check if a specific goal was passed (for tab switching)
@@ -1113,7 +2081,32 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
             const intentText = classification.intent ? ` The sender's intent: ${classification.intent}.` : "";
             const goalText = currentGoal ? ` Your response goal: ${currentGoal}.` : "";
 
-            return `You are ${roleDescription}. Generate exactly ${variantCount} complete, personalized reply options based on the source email provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"}${classification.recipient_company ? ` at ${classification.recipient_company}` : ""}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""} ${contextSpecific} 
+            // Build style matching instructions from writing_style profile
+            let styleInstructions = '';
+            if (classification.writing_style && classification.writing_style.sample_count > 0) {
+                const style = classification.writing_style;
+                const greetingExamples = style.greeting_patterns && style.greeting_patterns.length > 0
+                    ? ` Use greetings similar to: ${style.greeting_patterns.slice(0, 2).join(', ')}.`
+                    : '';
+                const closingExamples = style.closing_patterns && style.closing_patterns.length > 0
+                    ? ` Use closings similar to: ${style.closing_patterns.slice(0, 2).join(', ')}.`
+                    : '';
+
+                styleInstructions = `\n\nCRITICAL STYLE MATCHING: Match YOUR natural writing style based on your previous emails:
+- Formality level: ${style.formality}
+- Sentence structure: ${style.sentence_length} length sentences
+- Word choice: ${style.word_choice} complexity vocabulary
+- Punctuation style: ${style.punctuation_style}
+- Uses emojis: ${style.usesEmojis ? 'yes' : 'no'}
+- Frequently uses exclamations: ${style.usesExclamations ? 'yes' : 'no'}
+- Typical greeting: ${style.startsWithGreeting ? 'yes' : 'no'}
+- Typical sign-off: ${style.endsWithSignOff ? 'yes' : 'no'}${greetingExamples}${closingExamples}
+Write in a way that sounds like YOU wrote it, matching your typical communication style.`;
+            }
+
+            return `You are ${roleDescription}. Generate exactly ${variantCount} complete, personalized reply options based on the source email provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"}${classification.recipient_company ? ` at ${classification.recipient_company}` : ""}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""} ${contextSpecific}${styleInstructions}
+
+CRITICAL: You are replying to the LATEST email ONLY. The LATEST email section below is what you must respond to. Directly address the content, questions, and intent of the LATEST email. The thread history is provided ONLY for background context - DO NOT respond to earlier messages in the thread. IGNORE the thread history when determining what to respond to. Your response must ONLY address what the sender said in their MOST RECENT message (the LATEST email section).
 
 IMPORTANT FORMATTING REQUIREMENTS:
 - Each variant should be a complete email ready to send, including greeting, body text, and closing
@@ -1139,36 +2132,17 @@ Dear [Name],
 Best regards,`;
         };
 
-        const rolePrompts = {
-            sales: buildRolePrompt(
-                'a world-class B2B sales email writer',
-                'Respond appropriately based on your interest level in the product/service.'
-            ),
-            recruiter: buildRolePrompt(
-                'a professional candidate responding to a recruiter\'s job offer',
-                'The sender (recruiter) is OFFERING a job position to YOU (the recipient/candidate). Respond as the candidate - express interest, ask questions about the role, or politely decline. Do NOT respond as if you are offering them a job.'
-            ),
-            jobseeker: buildRolePrompt(
-                'a hiring manager or recruiter responding to a job application',
-                'The sender is applying for a position. Respond appropriately as the recipient (hiring manager/recruiter).'
-            ),
-            support: buildRolePrompt(
-                'an empathetic customer support specialist',
-                'Address the customer\'s concern professionally and helpfully.'
-            ),
-            networking: buildRolePrompt(
-                'a professional building genuine connections',
-                'Keep it professional, warm, and relationship-focused.'
-            ),
-            personal: buildRolePrompt(
-                'writing a friendly, personal email',
-                'Keep it warm and conversational.'
-            ),
-            other: buildRolePrompt(
-                'a professional email reply writer',
-                'Carefully analyze the source email to understand the context, relationship, and intent. Respond appropriately from the recipient\'s perspective.'
-            )
-        };
+        // Get matched type from userPackages based on classification.type
+        const matchedPackage = userPackages.find(p => p.name === classification.type) || userPackages.find(p => p.name === 'generic');
+        const roleDescription = matchedPackage.roleDescription;
+        const contextSpecific = matchedPackage.contextSpecific;
+
+        // Build type-specific context instructions
+        const intentContext = classification.intent ? ` The sender's intent: ${classification.intent}.` : '';
+
+        // Build role prompt dynamically using matched type's roleDescription and contextSpecific
+        const dynamicContextSpecific = `${contextSpecific}${intentContext}`;
+        const rolePrompt = buildRolePrompt(roleDescription, dynamicContextSpecific);
 
         const intentText = classification.intent ? ` The sender's intent: ${classification.intent}.` : "";
         const goalText = currentGoal ? ` Your response goal: ${currentGoal}.` : "";
@@ -1176,8 +2150,33 @@ Best regards,`;
             ? classification.key_topics.join(", ")
             : "";
 
+        // Build style matching instructions for LinkedIn
+        let linkedinStyleInstructions = '';
+        if (classification.writing_style && classification.writing_style.sample_count > 0) {
+            const style = classification.writing_style;
+            const greetingExamples = style.greeting_patterns && style.greeting_patterns.length > 0
+                ? ` Use greetings similar to: ${style.greeting_patterns.slice(0, 2).join(', ')}.`
+                : '';
+            const closingExamples = style.closing_patterns && style.closing_patterns.length > 0
+                ? ` Use closings similar to: ${style.closing_patterns.slice(0, 2).join(', ')}.`
+                : '';
+
+            linkedinStyleInstructions = `\n\nCRITICAL STYLE MATCHING: Match YOUR natural writing style based on your previous messages:
+- Formality level: ${style.formality}
+- Sentence structure: ${style.sentence_length} length sentences
+- Word choice: ${style.word_choice} complexity vocabulary
+- Punctuation style: ${style.punctuation_style}
+- Uses emojis: ${style.usesEmojis ? 'yes' : 'no'}
+- Frequently uses exclamations: ${style.usesExclamations ? 'yes' : 'no'}
+- Typical greeting: ${style.startsWithGreeting ? 'yes' : 'no'}
+- Typical sign-off: ${style.endsWithSignOff ? 'yes' : 'no'}${greetingExamples}${closingExamples}
+Write in a way that sounds like YOU wrote it, matching your typical communication style.`;
+        }
+
         const systemPrompt = platform === 'linkedin'
-            ? `You are a professional LinkedIn message writer. Generate exactly ${variantSet.length} complete, personalized reply options based on the source message provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"} at ${classification.recipient_company || "their company"}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""}
+            ? `You are a professional LinkedIn message writer. Generate exactly ${variantSet.length} complete, personalized reply options based on the source message provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"} at ${classification.recipient_company || "their company"}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""}${linkedinStyleInstructions}
+
+CRITICAL: You are replying to the LATEST message ONLY. The LATEST message section below is what you must respond to. Directly address the content, questions, and intent of the LATEST message. The conversation history is provided ONLY for background context - DO NOT respond to earlier messages in the conversation. IGNORE the conversation history when determining what to respond to. Your response must ONLY address what the sender said in their MOST RECENT message (the LATEST message section).
 
 IMPORTANT FORMATTING REQUIREMENTS:
 - Each variant should be a complete message ready to send, including greeting, body text, and closing
@@ -1201,64 +2200,67 @@ Hi [Name],
 [Message body text]
 
 Best regards,`
-            : rolePrompts[classification.type] || rolePrompts.other;
+            : rolePrompt;
 
         // Note: Personalization is now included in the role prompts, so we don't need to add it separately
         const finalSystemPrompt = systemPrompt;
 
-        // Determine API endpoint based on provider
-        let apiEndpoint;
-        let requestBody;
-        let headers = {
-            'Content-Type': 'application/json',
-        };
+        // Extract the actual email being replied to and thread history separately
+        // sourceMessageText is the ACTUAL email being replied to (the specific one, not necessarily latest)
+        // Use threadHistory from regenerateContext if available (it excludes the email being replied to)
+        const emailBeingRepliedTo = sourceMessageText || '';
+        const previousThreadHistory = (regenerateContext && regenerateContext.threadHistory)
+            ? regenerateContext.threadHistory
+            : (richContext.thread && richContext.thread !== 'New message'
+                ? richContext.thread
+                : '');
 
-        if (apiConfig.provider === 'openai' || apiConfig.provider === 'grok') {
-            apiEndpoint = apiConfig.provider === 'openai'
-                ? 'https://api.openai.com/v1/chat/completions'
-                : 'https://api.x.ai/v1/chat/completions';
+        // Build messages array for API call with clear separation of latest email vs thread history
+        const messages = [
+            {
+                role: 'system',
+                content: finalSystemPrompt
+            },
+            {
+                role: 'user',
+                content: `=== EMAIL BEING REPLIED TO (YOU ARE REPLYING TO THIS - IGNORE EVERYTHING ELSE BELOW) ===
+${emailBeingRepliedTo}
 
-            headers['Authorization'] = `Bearer ${apiKey}`;
+${previousThreadHistory ? `=== PREVIOUS THREAD HISTORY (IGNORE THIS - FOR BACKGROUND CONTEXT ONLY) ===
+${previousThreadHistory}
 
-            requestBody = {
-                model: apiConfig.model,
-                messages: [
-                    {
-                        role: 'system',
-                        content: finalSystemPrompt
-                    },
-                    {
-                        role: 'user',
-                        content: `SOURCE ${platform === 'linkedin' ? 'MESSAGE' : 'EMAIL'} YOU RECEIVED:
-${sourceMessageText}
+REMINDER: You are replying to the LATEST email above. DO NOT respond to anything in the thread history. The thread history is only for understanding context, NOT for determining what to respond to.
 
-${richContext.fullContext ? `ADDITIONAL CONTEXT:\n${richContext.fullContext}\n\n` : ''}${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platform === 'linkedin' ? 'message' : 'email'} is named "${senderName || recipientName}"${recipientCompany ? ` from ${recipientCompany}` : ''}. You are replying TO them. Address them by their actual name "${senderName || recipientName}" in your greeting. Do NOT use "Google", "Hi there", "Hello", or any generic greeting - use their actual name "${senderName || recipientName}".\n\n` : 'IMPORTANT: Extract the sender\'s name from the email above and use it in your greeting. Do NOT use generic greetings like "Hi Google" or "Hello there".\n\n'}CRITICAL - Do NOT include in your response:
+` : ''}${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}
+
+${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platform === 'linkedin' ? 'message' : 'email'} is named "${senderName || recipientName}"${recipientCompany ? ` from ${recipientCompany}` : ''}. You are replying TO them. Address them by their actual name "${senderName || recipientName}" in your greeting. Do NOT use "Google", "Hi there", "Hello", or any generic greeting - use their actual name "${senderName || recipientName}".\n\n` : 'IMPORTANT: Extract the sender\'s name from the email above and use it in your greeting. Do NOT use generic greetings like "Hi Google" or "Hello there".\n\n'}CRITICAL - Do NOT include in your response:
 - A subject line (it's already set)
 - Your signature, name, email address, phone number, or company name (${platform === 'gmail' ? 'Gmail will automatically add your signature' : 'signatures are not needed'})
 - Made-up names, companies, or contact information
 - Generic greetings like "Hi Google" or "Hello there" - use the actual sender's name
 - Any text after the closing (no signatures, no contact info)
 - Labels like "1. Friendly response" or "2. Insightful response" - just write the actual email text`
-                    }
-                ],
-                temperature: 0.8,
-                max_tokens: 800
-            };
-        } else {
-            throw new Error('Unknown API provider: ' + apiConfig.provider);
-        }
+            }
+        ];
 
-        const response = await fetch(apiEndpoint, {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify(requestBody)
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            const errorMessage = data.error?.message || data.error?.message || `HTTP ${response.status}: ${response.statusText}`;
-            throw new Error(errorMessage);
+        let data;
+        try {
+            data = await callProxyAPI(
+                apiConfig.provider,
+                apiConfig.model,
+                messages,
+                0.8,  // temperature
+                800   // max_tokens
+            );
+        } catch (fetchError) {
+            // Handle network errors (CORS, connection issues, etc.)
+            const networkError = fetchError.message || String(fetchError);
+            console.error('Network error during draft generation API call:', networkError);
+            if (networkError.includes('Failed to fetch') || networkError.includes('NetworkError')) {
+                throw new Error(`Network error: Unable to connect to ${apiConfig.provider} API. Please check:\n1. Your internet connection\n2. CORS settings (if testing locally)\n3. API endpoint is accessible\n\nError: ${networkError}`);
+            }
+            // Re-throw other errors (they're already formatted by callProxyAPI)
+            throw fetchError;
         }
 
         if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
@@ -1520,10 +2522,10 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
             iconImg.src = iconUrl;
             iconImg.alt = 'ResponseAble';
             iconImg.style.cssText = 'width: 24px !important; height: 24px !important; display: inline-block !important; vertical-align: middle !important; object-fit: contain !important; flex-shrink: 0 !important;';
-            iconImg.onerror = (e) => {
+            iconImg.addEventListener('error', (e) => {
                 console.error('Failed to load raicon20x20.png in overlay from:', iconImg.src);
                 iconImg.style.display = 'none';
-            };
+            });
             iconContainer.appendChild(iconImg);
         } catch (error) {
             console.error('Error loading overlay icon:', error);
@@ -1533,7 +2535,7 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
     // Add close button handler
     const closeButton = overlay.querySelector('#responseable-close-button');
     if (closeButton) {
-        closeButton.onclick = () => overlay.remove();
+        closeButton.addEventListener('click', () => overlay.remove());
     }
 
     // Tab switching logic
@@ -1548,7 +2550,7 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
         goalTabs.forEach((tab, index) => {
             const goal = responseGoals[index];
 
-            tab.onclick = async () => {
+            tab.addEventListener('click', async () => {
                 // Update active tab styling
                 goalTabs.forEach(t => {
                     const isActive = t === tab;
@@ -1612,92 +2614,16 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
                         regenerateContext.recipientCompany,
                         adapter,
                         (newDraftsText) => {
-                            // Parse new drafts using the same robust logic as initial parsing
-                            let newDraftBlocks = [];
-
-                            if (newDraftsText.includes('---RESPONSE---')) {
-                                newDraftBlocks = newDraftsText.split(/---RESPONSE---/g)
-                                    .map(block => {
-                                        let cleaned = block.trim();
-                                        // Remove variant labels that might appear at the start (e.g., "1. Simple Agreement", "2. Enthusiastic Confirmation")
-                                        // Match patterns like: "1. Variant Name", "Variant Name", or numbered lists
-                                        cleaned = cleaned.replace(/^\d+\.\s*[A-Z][^\n]*(?:\n|$)/, '');
-                                        cleaned = cleaned.replace(/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s*$/m, ''); // Remove standalone variant names on their own line
-                                        // Remove labels like "1. Friendly response", "2. Insightful response", etc.
-                                        cleaned = cleaned.replace(/^\d+\.\s*(Friendly|Insightful|Polite|Formal|Professional|Concise)\s+(response|message)[\s:]*\n?/i, '');
-                                        cleaned = cleaned.replace(/^(Friendly|Insightful|Polite|Formal|Professional|Concise)\s+(response|message):\s*/i, '');
-                                        // Remove any leading numbers followed by labels or variant names
-                                        cleaned = cleaned.replace(/^\d+\.\s*[^\n]*\n/, '');
-                                        // Remove variant names that appear as standalone lines (e.g., "Simple Agreement" on its own line)
-                                        cleaned = cleaned.replace(/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s*$/m, '');
-                                        return cleaned.trim();
-                                    })
-                                    .filter(block => block.length > 10); // Minimum length check
-                            } else {
-                                // Try to split by numbered patterns, but be smarter about it
-                                const numberedPattern = /(?:^|\n)\s*(\d+)\.\s+[^\n]*\n/g;
-                                const matches = [...newDraftsText.matchAll(numberedPattern)];
-
-                                if (matches.length >= 4) {
-                                    for (let i = 0; i < matches.length; i++) {
-                                        const match = matches[i];
-                                        const startIndex = match.index;
-                                        const endIndex = i < matches.length - 1 ? matches[i + 1].index : newDraftsText.length;
-                                        let content = newDraftsText.substring(startIndex, endIndex).trim();
-                                        // Remove the numbered label line
-                                        content = content.replace(/^\d+\.\s+[^\n]*\n/, '').trim();
-                                        // Remove variant names that appear as standalone lines
-                                        content = content.replace(/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s*$/m, '');
-                                        if (content && content.length > 10) {
-                                            newDraftBlocks.push(content);
-                                        }
-                                    }
-                                } else {
-                                    // Split by multiple newlines, but filter out variant name lines
-                                    newDraftBlocks = newDraftsText.split(/\n\n\n+/)
-                                        .map(d => {
-                                            let cleaned = d.trim();
-                                            // Remove variant names that appear as standalone lines
-                                            cleaned = cleaned.replace(/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s*$/m, '');
-                                            return cleaned;
-                                        })
-                                        .filter(d => d.length > 0 && !d.match(/^---+$/) && d.length > 10);
-                                }
-                            }
-
-                            // Post-process: Remove any blocks that are just variant names or labels
-                            newDraftBlocks = newDraftBlocks.filter(block => {
-                                const trimmed = block.trim();
-                                // Skip if it's just a variant name (Title Case words, no punctuation except maybe at end)
-                                if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\.?\s*$/.test(trimmed)) {
-                                    return false;
-                                }
-                                // Skip if it's just a numbered label
-                                if (/^\d+\.\s*[A-Z][^\n]*$/.test(trimmed)) {
-                                    return false;
-                                }
-                                return true;
-                            });
-
-                            // Render new drafts
-                            const newDraftsHtml = renderDraftsHtml(newDraftBlocks, goal);
-                            draftsContainer.innerHTML = newDraftsHtml;
-
-                            // Re-attach click handlers for draft insertion
-                            attachDraftClickHandlers(overlay, adapter);
-
-                            // Hide loading, show drafts
-                            loadingIndicator.style.display = 'none';
-                            draftsContainer.style.display = 'block';
-
-                            generatedGoals.add(goal);
-                        }
+                            // Re-render the drafts with new goal
+                            showDraftsOverlay(newDraftsText, regenerateContext.context, platform, adapter, { ...classification, _currentGoal: goal, _currentVariantSet: goalVariantSet, _currentTone: goalTone }, regenerateContext);
+                        },
+                        regenerateContext  // Pass regenerateContext
                     );
                 } catch (err) {
                     console.error('Error generating drafts for goal:', err);
                     loadingIndicator.innerHTML = 'Error generating drafts. Please try again.';
                 }
-            };
+            });
         });
 
         // Mark first tab as active and set initial description
@@ -1714,13 +2640,13 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
     const attachDraftClickHandlers = (overlayEl, adapterEl) => {
         const draftOptions = overlayEl.querySelectorAll('.responseable-draft-option');
         draftOptions.forEach(draftOption => {
-            draftOption.onclick = () => {
+            draftOption.addEventListener('click', () => {
                 const draftText = draftOption.getAttribute('data-draft-text');
                 if (draftText && adapterEl) {
                     adapterEl.insertText(draftText);
                     overlayEl.remove();
                 }
-            };
+            });
         });
     };
 
@@ -1786,7 +2712,8 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
                         (newDraftsText) => {
                             // Re-render the drafts with new tone
                             showDraftsOverlay(newDraftsText, regenerateContext.context, platform, adapter, updatedClassification, regenerateContext);
-                        }
+                        },
+                        regenerateContext  // Pass regenerateContext
                     );
                 } catch (err) {
                     regenerateStatus.textContent = 'Error regenerating';
@@ -1805,7 +2732,7 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
 
     // Click draft to insert
     overlay.querySelectorAll('.responseable-draft-option').forEach((block) => {
-        block.onclick = () => {
+        block.addEventListener('click', () => {
             // Get the draft text from the data attribute (excludes the variant header)
             // Decode HTML entities
             let draftText = block.getAttribute('data-draft-text');
@@ -1821,7 +2748,7 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
             }
             adapter.insertText(draftText);
             overlay.remove();
-        };
+        });
     });
 
     document.body.appendChild(overlay);
@@ -1833,11 +2760,6 @@ const createCommentButtonHandler = (editor) => {
         const commentButton = this;
         try {
             await loadApiConfig();
-            const apiKey = getApiKey(apiConfig.provider);
-            if (!apiKey) {
-                alert(`API key not configured for ${apiConfig.provider}. Please contact the extension developer.`);
-                return;
-            }
 
             // Get the post/comment context
             const postText = editor.closest('.feed-shared-update-v2, .feed-shared-update-v2__commentary, .update-components-text')?.innerText?.trim() || '';
@@ -1855,63 +2777,25 @@ const createCommentButtonHandler = (editor) => {
                 } catch (e) { }
             }
 
-            // Call AI API to generate comment responses
-            let apiEndpoint;
-            let requestBody;
-            const headers = {
-                'Content-Type': 'application/json',
-            };
+            // Call AI API to generate comment responses through Vercel proxy
+            const messages = [
+                {
+                    role: 'system',
+                    content: 'You are a helpful assistant that generates professional LinkedIn comment responses.'
+                },
+                {
+                    role: 'user',
+                    content: `LinkedIn post content:\n\n${postText}\n\n${commentContext ? `Current comment draft:\n${commentContext}\n\n` : ''}Please generate 4 complete comment response variants. Format each response as a complete comment ready to post. Separate each response with exactly "---RESPONSE---" on its own line.\n\n1. Friendly response\n---RESPONSE---\n2. Insightful response\n---RESPONSE---\n3. Professional response\n---RESPONSE---\n4. Concise response`
+                }
+            ];
 
-            if (apiConfig.provider === 'openai') {
-                apiEndpoint = 'https://api.openai.com/v1/chat/completions';
-                headers['Authorization'] = `Bearer ${apiKey}`;
-                requestBody = {
-                    model: apiConfig.model,
-                    messages: [
-                        {
-                            role: 'system',
-                            content: 'You are a helpful assistant that generates professional LinkedIn comment responses.'
-                        },
-                        {
-                            role: 'user',
-                            content: `LinkedIn post content:\n\n${postText}\n\n${commentContext ? `Current comment draft:\n${commentContext}\n\n` : ''}Please generate 4 complete comment response variants. Format each response as a complete comment ready to post. Separate each response with exactly "---RESPONSE---" on its own line.\n\n1. Friendly response\n---RESPONSE---\n2. Insightful response\n---RESPONSE---\n3. Professional response\n---RESPONSE---\n4. Concise response`
-                        }
-                    ],
-                    temperature: 0.7,
-                    max_tokens: 1000
-                };
-            } else if (apiConfig.provider === 'grok') {
-                apiEndpoint = 'https://api.x.ai/v1/chat/completions';
-                headers['Authorization'] = `Bearer ${apiKey}`;
-                requestBody = {
-                    model: apiConfig.model,
-                    messages: [
-                        {
-                            role: 'system',
-                            content: 'You are a helpful assistant that generates professional LinkedIn comment responses.'
-                        },
-                        {
-                            role: 'user',
-                            content: `LinkedIn post content:\n\n${postText}\n\n${commentContext ? `Current comment draft:\n${commentContext}\n\n` : ''}Please generate 4 complete comment response variants. Format each response as a complete comment ready to post. Separate each response with exactly "---RESPONSE---" on its own line.\n\n1. Friendly response\n---RESPONSE---\n2. Insightful response\n---RESPONSE---\n3. Professional response\n---RESPONSE---\n4. Concise response`
-                        }
-                    ],
-                    temperature: 0.7,
-                    max_tokens: 1000
-                };
-            }
-
-            const response = await fetch(apiEndpoint, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(requestBody)
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error?.message || `API returned ${response.status}`);
-            }
-
-            const data = await response.json();
+            const data = await callProxyAPI(
+                apiConfig.provider,
+                apiConfig.model,
+                messages,
+                0.7,  // temperature
+                1000  // max_tokens
+            );
             const draftsText = data.choices?.[0]?.message?.content || '';
             if (!draftsText) {
                 throw new Error('No response content received from API');
@@ -2072,7 +2956,7 @@ const injectCommentButton = () => {
 
             // Create and insert icon-only button before the first child div
             const commentButton = createIconOnlyButton('Generate AI comment response', 'linkedin');
-            commentButton.onclick = createCommentButtonHandler(editor);
+            commentButton.addEventListener('click', createCommentButtonHandler(editor));
 
             // Insert before the first child (emoji button container)
             const firstChild = toolbarContainer.firstElementChild;

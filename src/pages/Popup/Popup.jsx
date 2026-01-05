@@ -32,7 +32,7 @@ const Popup = () => {
     // Get icon URL
     if (browserAPI.runtime) {
       try {
-        const url = browserAPI.runtime.getURL('raicon20x20.png');
+        const url = browserAPI.runtime.getURL('raicon.png');
         setIconUrl(url);
       } catch (error) {
         console.error('Failed to get icon URL:', error);
