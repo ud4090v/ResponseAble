@@ -1,5 +1,3 @@
-import React from 'react';
-import { createRoot } from 'react-dom/client';
 import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
 
 // Ensure chrome API is available
@@ -20,6 +18,17 @@ let apiConfig = {
     model: 'grok-4-latest',
     numVariants: 4,
 };
+
+// Default response variants used when classification doesn't provide specific variants
+const DEFAULT_VARIANTS = [
+    'Friendly response',
+    'Insightful response',
+    'Polite response',
+    'Professional neutral response',
+    'Concise response',
+    'Brief response',
+    'Detailed response'
+];
 
 // Helper function to make API calls through Vercel proxy
 const callProxyAPI = async (provider, model, messages, temperature = 0.8, max_tokens = 1000) => {
@@ -165,11 +174,10 @@ const mergeStyleProfile = (existingProfile, newObservations) => {
     const totalCount = existingCount + newCount;
 
     // Weighted average for numeric-like values
-    const mergeValue = (existing, newVal, weight) => {
+    const mergeValue = (existing, newVal) => {
         if (!existing || existingCount === 0) return newVal;
         // Simple merge: favor existing if we have many samples, favor new if we have few
         const existingWeight = Math.min(existingCount / 10, 0.7); // Cap at 70% weight for existing
-        const newWeight = 1 - existingWeight;
         return existingWeight > 0.5 ? existing : newVal; // Use existing if we have enough samples, otherwise use new
     };
 
@@ -196,10 +204,10 @@ const mergeStyleProfile = (existingProfile, newObservations) => {
     };
 
     return {
-        formality: mergeValue(existingProfile.formality, newObservations.formality, totalCount),
-        sentence_length: mergeValue(existingProfile.sentence_length, newObservations.sentence_length, totalCount),
-        word_choice: mergeValue(existingProfile.word_choice, newObservations.word_choice, totalCount),
-        punctuation_style: mergeValue(existingProfile.punctuation_style, newObservations.punctuation_style, totalCount),
+        formality: mergeValue(existingProfile.formality, newObservations.formality),
+        sentence_length: mergeValue(existingProfile.sentence_length, newObservations.sentence_length),
+        word_choice: mergeValue(existingProfile.word_choice, newObservations.word_choice),
+        punctuation_style: mergeValue(existingProfile.punctuation_style, newObservations.punctuation_style),
         greeting_patterns: mergePatterns(existingProfile.greeting_patterns, newObservations.greeting_patterns),
         closing_patterns: mergePatterns(existingProfile.closing_patterns, newObservations.closing_patterns),
         usesEmojis: mergeBoolean(existingProfile.usesEmojis, newObservations.usesEmojis),
@@ -283,7 +291,7 @@ const extractUserEmails = (platform, richContext) => {
                 item.querySelector('[aria-label*="Sent"]') ||
                 item.querySelector('.g2, .g3, .g4, .g5, .g6, .g7, .g8, .g9, .gA, .gB'); // Gmail sent message classes
 
-            if (hasSentLabel || sentIndicator) {
+            if (hasSentLabel) {
                 const messageDiv = item.querySelector('div[dir="ltr"], div[aria-label="Message Body"]');
                 if (messageDiv && messageDiv.getAttribute('role') !== 'textbox') {
                     const text = messageDiv.innerText?.trim() || messageDiv.textContent?.trim() || '';
@@ -835,16 +843,7 @@ REMINDER: Classify based on the SPECIFIC EMAIL BEING REPLIED TO above.
                 }
                 const expectedNumVariants = apiConfig.numVariants || 4;
                 if (!variant_sets[goal] || !Array.isArray(variant_sets[goal]) || variant_sets[goal].length !== expectedNumVariants) {
-                    const defaultVariants = [
-                        'Friendly response',
-                        'Insightful response',
-                        'Polite response',
-                        'Professional neutral response',
-                        'Concise response',
-                        'Brief response',
-                        'Detailed response'
-                    ];
-                    variant_sets[goal] = defaultVariants.slice(0, expectedNumVariants);
+                    variant_sets[goal] = DEFAULT_VARIANTS.slice(0, expectedNumVariants);
                 }
                 if (!goal_titles[goal]) {
                     goal_titles[goal] = generateShortTitle(goal);
@@ -932,16 +931,7 @@ REMINDER: Classify based on the SPECIFIC EMAIL BEING REPLIED TO above.
                         }
                         const expectedNumVariants = apiConfig.numVariants || 4;
                         if (!variant_sets[goal] || !Array.isArray(variant_sets[goal]) || variant_sets[goal].length !== expectedNumVariants) {
-                            const defaultVariants = [
-                                'Friendly response',
-                                'Insightful response',
-                                'Polite response',
-                                'Professional neutral response',
-                                'Concise response',
-                                'Brief response',
-                                'Detailed response'
-                            ];
-                            variant_sets[goal] = defaultVariants.slice(0, expectedNumVariants);
+                            variant_sets[goal] = DEFAULT_VARIANTS.slice(0, expectedNumVariants);
                         }
                         if (!goal_titles[goal]) {
                             goal_titles[goal] = generateShortTitle(goal);
@@ -1427,8 +1417,8 @@ const platformAdapters = {
             const emailElements = Array.from(messageContainer.querySelectorAll('[email]'))
                 .filter(elem => messageContainer.contains(elem))
                 .sort((a, b) => {
-                    const aDist = Math.abs(a.compareDocumentPosition(latestMessageDiv));
-                    const bDist = Math.abs(b.compareDocumentPosition(latestMessageDiv));
+                    const aDist = Math.abs(a.compareDocumentPosition(messageContainer));
+                    const bDist = Math.abs(b.compareDocumentPosition(messageContainer));
                     return aDist - bDist;
                 });
 
@@ -1751,9 +1741,6 @@ const createIconOnlyButton = (buttonTooltip, platform) => {
             iconImg.addEventListener('error', (e) => {
                 console.error('Failed to load raiconvector.png from:', iconUrl, e);
             });
-            iconImg.addEventListener('load', () => {
-                console.log('Successfully loaded raiconvector.png for comment button');
-            });
             generateButton.appendChild(iconImg);
         } catch (error) {
             // Handle extension context errors
@@ -2045,21 +2032,10 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
         await loadApiConfig();
         const expectedNumVariants = apiConfig.numVariants || 4;
 
-        // Get default variants based on numVariants setting
-        const defaultVariants = [
-            'Friendly response',
-            'Insightful response',
-            'Polite response',
-            'Professional neutral response',
-            'Concise response',
-            'Brief response',
-            'Detailed response'
-        ];
-
         // Use provided variant set if available (from tab switching), otherwise get from classification
         const variantSet = classification._currentVariantSet || (classification.variant_sets && classification.variant_sets[currentGoal]
             ? classification.variant_sets[currentGoal]
-            : defaultVariants.slice(0, expectedNumVariants));
+            : DEFAULT_VARIANTS.slice(0, expectedNumVariants));
 
         const toneSet = classification.tone_sets && classification.tone_sets[currentGoal]
             ? classification.tone_sets[currentGoal]
@@ -2382,20 +2358,10 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
         : ['respond appropriately'];
 
     const currentGoal = responseGoals[0]; // Start with first goal
-    // Get default variants based on numVariants setting
-    const defaultVariants = [
-        'Friendly response',
-        'Insightful response',
-        'Polite response',
-        'Professional neutral response',
-        'Concise response',
-        'Brief response',
-        'Detailed response'
-    ];
     const expectedNumVariants = apiConfig.numVariants || 4;
     const variantSet = classification && classification.variant_sets && classification.variant_sets[currentGoal]
         ? classification.variant_sets[currentGoal]
-        : defaultVariants.slice(0, expectedNumVariants);
+        : DEFAULT_VARIANTS.slice(0, expectedNumVariants);
 
     const currentTone = classification && classification.tone_sets && classification.tone_sets[currentGoal] && classification.tone_sets[currentGoal][0]
         ? classification.tone_sets[currentGoal][0]
@@ -2659,7 +2625,6 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
         const draftsContainer = overlay.querySelector('#drafts-container');
         const loadingIndicator = overlay.querySelector('#loading-indicator');
         const regenerateStatus = overlay.querySelector('#regenerate-status');
-        const goalDescription = overlay.querySelector('#goal-description-text');
 
         // Get current goal (from active tab or default)
         const getCurrentGoal = () => {
@@ -2681,11 +2646,6 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
                 loadingIndicator.style.display = 'block';
 
                 try {
-                    // Get variant set for current goal
-                    const goalVariantSet = classification.variant_sets && classification.variant_sets[currentGoal]
-                        ? classification.variant_sets[currentGoal]
-                        : variantSet;
-
                     // Update classification to use new tone for this goal
                     const updatedClassification = { ...classification };
                     if (!updatedClassification.tone_sets) {
@@ -2887,21 +2847,16 @@ const injectCommentButton = () => {
         '.feed-shared-update-v2 div[contenteditable="true"][role="textbox"]'
     );
 
-    console.log('ResponseAble: Found', commentTextEditors.length, 'comment text editors');
-
     if (commentTextEditors.length === 0) {
         return; // No comment editors found
     }
 
-    commentTextEditors.forEach((editor, index) => {
+    commentTextEditors.forEach((editor) => {
         // Skip if already has our button
         const commentContainer = editor.closest('.comments-comment-box, .comment-shared-texteditor, .feed-shared-update-v2');
         if (commentContainer?.querySelector('.responseable-comment-button')) {
-            console.log('ResponseAble: Editor', index, 'already has button, skipping');
             return;
         }
-
-        console.log('ResponseAble: Processing editor', index, 'container:', !!commentContainer);
 
         // Find the container with class "display-flex justify-space-between"
         // This is the parent container that has the toolbar with emoji/image buttons
@@ -2915,7 +2870,6 @@ const injectCommentButton = () => {
                 const displayFlexChild = current.querySelector('> .display-flex:first-child');
                 if (displayFlexChild) {
                     toolbarContainer = displayFlexChild;
-                    console.log('ResponseAble: Found toolbar via justify-space-between method');
                     break;
                 }
             }
@@ -2925,7 +2879,6 @@ const injectCommentButton = () => {
         // If not found with that approach, try finding by the emoji button
         if (!toolbarContainer) {
             const emojiButton = commentContainer?.querySelector('button.comments-comment-box__emoji-picker-trigger, button[aria-label*="Emoji"]');
-            console.log('ResponseAble: Emoji button found:', !!emojiButton);
             if (emojiButton) {
                 // Find the parent div with class "display-flex" that contains both emoji and image buttons
                 let parent = emojiButton.parentElement;
@@ -2935,17 +2888,12 @@ const injectCommentButton = () => {
                         const hasImageButton = parent.querySelector('button.comments-comment-box__detour-icons, button[aria-label*="photo"], button[aria-label*="image"]');
                         if (hasImageButton) {
                             toolbarContainer = parent;
-                            console.log('ResponseAble: Found toolbar via emoji button method');
                             break;
                         }
                     }
                     parent = parent.parentElement;
                 }
             }
-        }
-
-        if (!toolbarContainer) {
-            console.log('ResponseAble: Toolbar container not found for editor', index);
         }
 
         if (toolbarContainer) {
@@ -2962,13 +2910,9 @@ const injectCommentButton = () => {
             const firstChild = toolbarContainer.firstElementChild;
             if (firstChild) {
                 toolbarContainer.insertBefore(commentButton, firstChild);
-                console.log('ResponseAble: Comment button inserted before first child');
             } else {
                 toolbarContainer.appendChild(commentButton);
-                console.log('ResponseAble: Comment button appended to toolbar');
             }
-        } else {
-            console.log('ResponseAble: Toolbar container not found for comment editor');
         }
     });
 };
