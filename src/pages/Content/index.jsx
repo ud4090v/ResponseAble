@@ -1,103 +1,541 @@
-import React from 'react';
-import { createRoot } from 'react-dom/client';
+/**
+ * ResponseAble Content Script
+ * 
+ * This content script injects AI-powered response generation buttons into Gmail and LinkedIn.
+ * It detects the platform, extracts email/message context, classifies the content using AI,
+ * and generates multiple response variants for the user to choose from.
+ * 
+ * @module ContentScript
+ */
+
 import API_KEYS from '../../config/apiKeys.js';
 
-// Ensure chrome API is available
+/* =============================================================================
+ * CONSTANTS AND CONFIGURATION
+ * ============================================================================= */
+
+/**
+ * Default response variants used when AI classification doesn't provide specific variants.
+ * These are generic response styles that work for most email types.
+ * @constant {string[]}
+ */
+const DEFAULT_VARIANTS = [
+    'Friendly response',
+    'Insightful response',
+    'Polite response',
+    'Professional neutral response',
+    'Concise response',
+    'Brief response',
+    'Detailed response'
+];
+
+/**
+ * Gmail DOM Selectors - Centralized configuration for Gmail element selection.
+ * Gmail uses obfuscated class names that can change, so we use multiple fallback strategies.
+ * Each selector group includes primary and fallback selectors.
+ * @constant {Object}
+ */
+const GMAIL_SELECTORS = {
+    /**
+     * Send button selectors - Gmail's send button has specific class combinations.
+     * The T-I class family is Gmail's button styling system.
+     * - T-I: Base button class
+     * - J-J5-Ji: Interactive element
+     * - aoO: Send action
+     * - v7: Button variant
+     * - T-I-atl: Primary action styling
+     * - L3: Layout class
+     */
+    sendButton: [
+        '.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3',
+        '.T-I.J-J5-Ji.aoO.T-I-atl.L3',
+        'div[role="button"][data-tooltip*="Send"]',
+        'div[aria-label*="Send"][role="button"]'
+    ],
+    
+    /**
+     * Compose body selectors - The main text input area for composing emails.
+     * Uses aria-label for accessibility and role for semantic identification.
+     */
+    composeBody: [
+        'div[aria-label="Message Body"][role="textbox"]',
+        'div[aria-label="Message body"][role="textbox"]',
+        'div.Am.Al.editable[role="textbox"]',
+        'div[g_editable="true"][role="textbox"]'
+    ],
+    
+    /**
+     * To field selectors - The recipient input field.
+     * Gmail uses various aria-labels depending on context (compose vs reply).
+     */
+    toField: [
+        'input[aria-label="To recipients"]',
+        'input[name="to"]',
+        'input[aria-label="To"]',
+        'input[aria-label="Add recipients"]'
+    ],
+    
+    /**
+     * Subject field selectors - The email subject input.
+     */
+    subjectField: [
+        'input[aria-label="Subject"]',
+        'input[name="subjectbox"]',
+        'input[placeholder="Subject"]'
+    ],
+    
+    /**
+     * Message body selectors (for reading existing messages, not compose).
+     * Used to extract thread context.
+     */
+    messageBody: [
+        'div[aria-label="Message Body"]',
+        'div.a3s.aiL',
+        'div[data-message-id] div.ii.gt'
+    ],
+    
+    /**
+     * Sender name selectors - Elements containing sender information.
+     * Gmail stores email addresses in custom attributes.
+     */
+    senderName: [
+        'span[email][name]',
+        '[email]',
+        'span.gD',
+        'span[data-hovercard-id]'
+    ],
+    
+    /**
+     * Thread container selectors - The parent container for email threads.
+     */
+    threadContainer: [
+        '[role="main"]',
+        '.nH',
+        '.aDP',
+        '[role="dialog"]',
+        '.nH.if'
+    ],
+    
+    /**
+     * Thread list item selectors - Individual messages in a thread.
+     */
+    threadListItem: [
+        '[role="listitem"]',
+        'div[data-message-id]',
+        '.h7'
+    ]
+};
+
+/**
+ * LinkedIn DOM Selectors - Centralized configuration for LinkedIn element selection.
+ * LinkedIn's DOM is more stable than Gmail's but still requires multiple fallbacks.
+ * @constant {Object}
+ */
+const LINKEDIN_SELECTORS = {
+    /**
+     * Send button selectors - LinkedIn messaging send button.
+     */
+    sendButton: [
+        'button.msg-form__send-button',
+        'button[data-control-name="send"].msg-form__send-button',
+        'button[type="submit"].msg-form__send-button'
+    ],
+    
+    /**
+     * Compose input selectors - LinkedIn message input field.
+     * LinkedIn uses contenteditable divs for rich text input.
+     */
+    composeInput: [
+        'div[contenteditable="true"][role="textbox"].msg-s-message-list__compose-textarea',
+        'div[contenteditable="true"].msg-form__message-texteditor',
+        'div.msg-form__contenteditable',
+        'div[contenteditable="true"].msg-form__msg-content-container--scrollable'
+    ],
+    
+    /**
+     * Recipient name selectors - The name of the person you're messaging.
+     */
+    recipientName: [
+        '.msg-conversation-card__participant-name',
+        '.msg-conversation-listitem__participant-name',
+        '.msg-s-message-list__conversation-header-name'
+    ],
+    
+    /**
+     * Message body selectors - Individual messages in a conversation.
+     */
+    messageBody: [
+        '.msg-s-message-list__message-body',
+        '.msg-s-event-listitem__body',
+        '.msg-s-message-listitem__message-body'
+    ],
+    
+    /**
+     * Messaging context indicators - Elements that indicate we're in messaging.
+     */
+    messagingContext: [
+        '.msg-form__message-texteditor',
+        '.msg-s-message-list__compose-textarea',
+        '.msg-form__contenteditable',
+        '.msg-conversation-card',
+        '.msg-s-message-list'
+    ],
+    
+    /**
+     * Comment editor selectors - LinkedIn post comment input fields.
+     */
+    commentEditor: [
+        'div[contenteditable="true"][data-control-name="commentary_text_input"]',
+        'div.comments-comment-texteditor__text-view',
+        'div.comments-comment-box__text-editor',
+        'div.comments-comment-texteditor',
+        'div[contenteditable="true"].comments-comment-texteditor__text-view',
+        'div.comments-comment-box__main-container div[contenteditable="true"]',
+        'div.comment-shared-texteditor div[contenteditable="true"]',
+        '.feed-shared-update-v2 div[contenteditable="true"][role="textbox"]'
+    ]
+};
+
+/* =============================================================================
+ * UTILITY FUNCTIONS
+ * ============================================================================= */
+
+/**
+ * Gets the Chrome runtime API, with fallback to browser API for Firefox compatibility.
+ * Handles extension context invalidation gracefully.
+ * 
+ * @returns {Object|null} The Chrome/browser runtime object or null if unavailable
+ */
 const getChromeRuntime = () => {
-    if (typeof chrome !== 'undefined' && chrome.runtime) {
-        return chrome.runtime;
+    try {
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+            return chrome.runtime;
+        }
+        if (typeof browser !== 'undefined' && browser.runtime && browser.runtime.id) {
+            return browser.runtime;
+        }
+    } catch (e) {
+        // Extension context may be invalidated
+        if (e.message && e.message.includes('Extension context invalidated')) {
+            console.warn('[ResponseAble] Extension context invalidated - extension may need reload');
+        } else {
+            console.error('[ResponseAble] Error accessing runtime:', e);
+        }
     }
-    if (typeof browser !== 'undefined' && browser.runtime) {
-        return browser.runtime;
-    }
-    console.error('Chrome runtime API not available');
     return null;
 };
 
-// API configuration - loaded from Chrome storage
+/* =============================================================================
+ * API CONFIGURATION
+ * ============================================================================= */
+
+/**
+ * API configuration object - stores the current provider, model, and variant settings.
+ * This is loaded from Chrome storage and updated when settings change.
+ * @type {Object}
+ */
 let apiConfig = {
     provider: 'grok',
     model: 'grok-4-latest',
     numVariants: 4,
 };
 
-// Get API key for the selected provider
+/**
+ * Retrieves the API key for the specified provider from the config file.
+ * 
+ * @param {string} provider - The API provider name ('openai' or 'grok')
+ * @returns {string} The API key or empty string if not found
+ */
 const getApiKey = (provider) => {
     return API_KEYS[provider] || '';
 };
 
-// Load API configuration from storage
+/**
+ * Loads API configuration from Chrome storage.
+ * Falls back to default values if storage is unavailable.
+ * 
+ * @returns {Promise<Object>} The loaded API configuration
+ */
 const loadApiConfig = async () => {
     return new Promise((resolve) => {
-        const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
-        if (!storage) {
-            console.error('Chrome storage API not available');
+        try {
+            const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
+            if (!storage) {
+                console.warn('[ResponseAble] Chrome storage API not available, using defaults');
+                resolve(apiConfig);
+                return;
+            }
+            storage.sync.get(['apiProvider', 'apiModel', 'numVariants'], (result) => {
+                const numVariants = result.numVariants || 4;
+                apiConfig = {
+                    provider: result.apiProvider || 'grok',
+                    model: result.apiModel || 'grok-4-latest',
+                    // Clamp numVariants between 1 and 7 to prevent UI issues
+                    numVariants: Math.max(1, Math.min(7, numVariants)),
+                };
+                resolve(apiConfig);
+            });
+        } catch (error) {
+            console.error('[ResponseAble] Error in loadApiConfig:', error.message);
             resolve(apiConfig);
-            return;
         }
-        storage.sync.get(['apiProvider', 'apiModel', 'numVariants'], (result) => {
-            const numVariants = result.numVariants || 4;
-            apiConfig = {
-                provider: result.apiProvider || 'grok',
-                model: result.apiModel || 'grok-4-latest',
-                numVariants: Math.max(1, Math.min(7, numVariants)), // Clamp between 1 and 7
-            };
-            resolve(apiConfig);
-        });
     });
 };
 
-// Load config on startup
+// Initialize configuration on script load
 loadApiConfig();
 
-// Listen for config changes
-const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
-if (storage) {
-    storage.onChanged.addListener((changes) => {
-        if (changes.apiProvider || changes.apiModel || changes.numVariants) {
-            loadApiConfig();
+/**
+ * Set up listener for configuration changes in Chrome storage.
+ * This allows the extension to react to settings changes without reload.
+ */
+const initStorageListener = () => {
+    try {
+        const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
+        if (storage && storage.onChanged) {
+            storage.onChanged.addListener((changes) => {
+                if (changes.apiProvider || changes.apiModel || changes.numVariants) {
+                    loadApiConfig();
+                }
+            });
         }
-    });
-}
+    } catch (error) {
+        console.error('[ResponseAble] Error in initStorageListener:', error.message);
+    }
+};
+initStorageListener();
 
-// Platform detection
+/* =============================================================================
+ * PLATFORM DETECTION
+ * ============================================================================= */
+
+/**
+ * Detects the current platform based on the page hostname.
+ * Currently supports Gmail and LinkedIn.
+ * 
+ * @returns {string|null} 'gmail', 'linkedin', or null if unsupported platform
+ */
 const detectPlatform = () => {
     const hostname = window.location.hostname;
+    
+    // Gmail detection - includes both mail.google.com and gmail.com
     if (hostname.includes('mail.google.com') || hostname.includes('gmail.com')) {
         return 'gmail';
     }
+    
+    // LinkedIn detection
     if (hostname.includes('linkedin.com')) {
         return 'linkedin';
     }
+    
     return null;
 };
 
-// Email classification function - uses AI to classify email type and extract entities
+/* =============================================================================
+ * EMAIL CLASSIFICATION
+ * ============================================================================= */
+
+/**
+ * Creates a default classification result when AI classification fails or is unavailable.
+ * This ensures the extension can still function with sensible defaults.
+ * 
+ * @param {Object} richContext - The context object containing recipient info
+ * @returns {Object} Default classification with generic response options
+ */
+const createDefaultClassification = (richContext) => ({
+    type: 'other',
+    intent: 'general inquiry',
+    response_goals: ['respond appropriately'],
+    tone_needed: 'professional',
+    tone_sets: { 'respond appropriately': ['professional'] },
+    variant_sets: {
+        'respond appropriately': DEFAULT_VARIANTS.slice(0, apiConfig.numVariants || 4)
+    },
+    recipient_name: richContext.recipientName || '',
+    recipient_company: richContext.recipientCompany || null,
+    key_topics: []
+});
+
+/**
+ * Attempts to fix truncated or malformed JSON from AI responses.
+ * AI models sometimes return incomplete JSON due to token limits.
+ * This function tries to repair common issues.
+ * 
+ * @param {string} content - The potentially malformed JSON string
+ * @returns {string} The repaired JSON string
+ */
+const repairTruncatedJson = (content) => {
+    let fixedContent = content;
+    
+    // Step 1: Find and remove incomplete strings (strings without closing quotes)
+    // Track string state properly, accounting for escaped quotes
+    let inString = false;
+    let escapeNext = false;
+    let lastValidChar = -1;
+
+    for (let i = 0; i < fixedContent.length; i++) {
+        const char = fixedContent[i];
+        if (escapeNext) {
+            escapeNext = false;
+            lastValidChar = i;
+            continue;
+        }
+        if (char === '\\') {
+            escapeNext = true;
+            lastValidChar = i;
+            continue;
+        }
+        if (char === '"') {
+            inString = !inString;
+            lastValidChar = i;
+        } else if (!inString) {
+            lastValidChar = i;
+        }
+    }
+
+    // If we're still in a string at the end, truncate before the incomplete string
+    if (inString && lastValidChar >= 0) {
+        // Find where the incomplete string started
+        let searchStart = Math.max(0, lastValidChar - 200);
+        let stringStart = fixedContent.lastIndexOf('"', lastValidChar);
+
+        // Verify it's actually a string start (not escaped and followed by :)
+        while (stringStart > searchStart) {
+            let beforeQuote = fixedContent.substring(Math.max(0, stringStart - 1), stringStart);
+            if (beforeQuote !== '\\') {
+                let afterQuote = fixedContent.substring(stringStart + 1, Math.min(fixedContent.length, stringStart + 10)).trim();
+                if (afterQuote.startsWith(':') || afterQuote.startsWith(',') || afterQuote.startsWith('}') || afterQuote.startsWith(']')) {
+                    stringStart = fixedContent.lastIndexOf('"', stringStart - 1);
+                    continue;
+                }
+                fixedContent = fixedContent.substring(0, stringStart);
+                fixedContent = fixedContent.replace(/,\s*$/, '');
+                break;
+            }
+            stringStart = fixedContent.lastIndexOf('"', stringStart - 1);
+        }
+    } else {
+        fixedContent = fixedContent.substring(0, lastValidChar + 1);
+    }
+
+    // Step 2: Close incomplete arrays - count [ and ] brackets
+    let openBrackets = (fixedContent.match(/\[/g) || []).length;
+    let closeBrackets = (fixedContent.match(/\]/g) || []).length;
+    while (openBrackets > closeBrackets) {
+        fixedContent = fixedContent.trim().replace(/,\s*$/, '') + ']';
+        closeBrackets++;
+    }
+
+    // Step 3: Close incomplete objects - count { and } braces
+    let openBraces = (fixedContent.match(/\{/g) || []).length;
+    let closeBraces = (fixedContent.match(/\}/g) || []).length;
+    while (openBraces > closeBraces) {
+        fixedContent = fixedContent.trim().replace(/,\s*$/, '') + '}';
+        closeBraces++;
+    }
+
+    // Step 4: Remove trailing commas before closing braces/brackets
+    // This regex finds commas followed by optional whitespace and then } or ]
+    fixedContent = fixedContent.replace(/,\s*([}\]])/g, '$1');
+
+    return fixedContent;
+};
+
+/**
+ * Generates a short title from a goal text for use in tab labels.
+ * 
+ * @param {string} goal - The full goal text
+ * @returns {string} A shortened title (2-4 words)
+ */
+const generateShortTitle = (goal) => {
+    const words = goal.split(' ');
+    if (words.length <= 3) return goal;
+    return words.slice(0, 2).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+};
+
+/**
+ * Processes and validates the classification result from the AI.
+ * Ensures all required fields are present and properly formatted.
+ * 
+ * @param {Object} classification - The raw classification from AI
+ * @param {Object} richContext - The context object containing recipient info
+ * @returns {Object} The validated and normalized classification
+ */
+const processClassificationResult = (classification, richContext) => {
+    // Extract and validate response_goals
+    const response_goals = Array.isArray(classification.response_goals) && classification.response_goals.length > 0
+        ? classification.response_goals
+        : ['respond appropriately'];
+
+    // Extract tone_sets, variant_sets, and goal_titles with fallbacks
+    const tone_sets = classification.tone_sets && typeof classification.tone_sets === 'object'
+        ? classification.tone_sets
+        : {};
+
+    const variant_sets = classification.variant_sets && typeof classification.variant_sets === 'object'
+        ? classification.variant_sets
+        : {};
+
+    const goal_titles = classification.goal_titles && typeof classification.goal_titles === 'object'
+        ? classification.goal_titles
+        : {};
+
+    // Ensure each response_goal has corresponding tone_sets, variant_sets, and goal_titles
+    const expectedNumVariants = apiConfig.numVariants || 4;
+    response_goals.forEach(goal => {
+        // Ensure tone_sets has an entry for this goal
+        if (!tone_sets[goal] || !Array.isArray(tone_sets[goal]) || tone_sets[goal].length === 0) {
+            tone_sets[goal] = [classification.tone_needed || 'professional'];
+        }
+        // Ensure variant_sets has the correct number of variants for this goal
+        if (!variant_sets[goal] || !Array.isArray(variant_sets[goal]) || variant_sets[goal].length !== expectedNumVariants) {
+            variant_sets[goal] = DEFAULT_VARIANTS.slice(0, expectedNumVariants);
+        }
+        // Ensure goal_titles has an entry for this goal
+        if (!goal_titles[goal]) {
+            goal_titles[goal] = generateShortTitle(goal);
+        }
+    });
+
+    // Get primary tone from first goal's tone_set
+    const primaryGoal = response_goals[0];
+    const tone_needed = (tone_sets[primaryGoal] && tone_sets[primaryGoal][0])
+        ? tone_sets[primaryGoal][0]
+        : (classification.tone_needed || 'professional');
+
+    return {
+        type: classification.type || 'other',
+        intent: classification.intent || 'general inquiry',
+        response_goals: response_goals,
+        goal_titles: goal_titles,
+        tone_needed: tone_needed,
+        tone_sets: tone_sets,
+        variant_sets: variant_sets,
+        recipient_name: classification.recipient_name || richContext.recipientName || '',
+        recipient_company: classification.recipient_company || richContext.recipientCompany || null,
+        key_topics: classification.key_topics || []
+    };
+};
+
+/**
+ * Classifies an email/message using AI to determine its type, intent, and appropriate response strategies.
+ * This is the core intelligence of the extension - it analyzes the email context and generates
+ * customized response goals, tones, and variants.
+ * 
+ * @param {Object} richContext - Context object with recipient info and thread content
+ * @param {string} sourceMessageText - The text of the message being replied to
+ * @param {string} platform - The platform ('gmail' or 'linkedin')
+ * @returns {Promise<Object>} Classification result with type, intent, goals, tones, and variants
+ */
 const classifyEmail = async (richContext, sourceMessageText, platform) => {
     try {
         await loadApiConfig();
         const apiKey = getApiKey(apiConfig.provider);
+        
+        // If no API key, return defaults - don't block the user
         if (!apiKey) {
-            console.warn('API key not available for classification, using default');
-            return {
-                type: 'other',
-                intent: 'general inquiry',
-                response_goals: ['respond appropriately'],
-                tone_needed: 'professional',
-                tone_sets: { 'respond appropriately': ['professional'] },
-                variant_sets: {
-                    'respond appropriately': [
-                        'Friendly response',
-                        'Insightful response',
-                        'Polite response',
-                        'Professional neutral response',
-                        'Concise response'
-                    ]
-                },
-                recipient_name: richContext.recipientName || '',
-                recipient_company: richContext.recipientCompany || null,
-                key_topics: []
-            };
+            console.warn('[ResponseAble] API key not available for classification, using defaults');
+            return createDefaultClassification(richContext);
         }
 
         // Use cheaper/faster models for classification
@@ -179,167 +617,19 @@ Be highly context-specific for intent, goals, tones, and variants. Base everythi
 
         // Validate content before parsing
         if (!content || content === '{}' || content.length === 0) {
-            console.warn('Classification API returned empty or invalid content:', content);
             throw new Error('Empty classification response');
         }
 
-        // Try to fix common JSON issues - handle truncated responses
-        let fixedContent = content;
+        // Repair truncated JSON from AI response
+        const fixedContent = repairTruncatedJson(content);
 
-        // Step 1: Find and remove incomplete strings (strings that don't have a closing quote)
-        // Track string state properly, accounting for escaped quotes
-        let inString = false;
-        let escapeNext = false;
-        let lastValidChar = -1;
-
-        for (let i = 0; i < fixedContent.length; i++) {
-            const char = fixedContent[i];
-            if (escapeNext) {
-                escapeNext = false;
-                lastValidChar = i;
-                continue;
-            }
-            if (char === '\\') {
-                escapeNext = true;
-                lastValidChar = i;
-                continue;
-            }
-            if (char === '"') {
-                inString = !inString;
-                lastValidChar = i;
-            } else if (!inString) {
-                lastValidChar = i;
-            }
-        }
-
-        // If we're still in a string at the end, truncate before the incomplete string
-        if (inString && lastValidChar >= 0) {
-            // Find where the incomplete string started
-            let searchStart = Math.max(0, lastValidChar - 200);
-            let stringStart = fixedContent.lastIndexOf('"', lastValidChar);
-
-            // Verify it's actually a string start (not escaped and followed by :)
-            while (stringStart > searchStart) {
-                // Check if the quote is escaped
-                let beforeQuote = fixedContent.substring(Math.max(0, stringStart - 1), stringStart);
-                if (beforeQuote !== '\\') {
-                    // Check if it looks like a key (has : after) or value (has , or } or ] after)
-                    let afterQuote = fixedContent.substring(stringStart + 1, Math.min(fixedContent.length, stringStart + 10)).trim();
-                    if (afterQuote.startsWith(':') || afterQuote.startsWith(',') || afterQuote.startsWith('}') || afterQuote.startsWith(']')) {
-                        // This might be a key, keep looking
-                        stringStart = fixedContent.lastIndexOf('"', stringStart - 1);
-                        continue;
-                    }
-                    // This looks like a value string that's incomplete
-                    fixedContent = fixedContent.substring(0, stringStart);
-                    // Remove trailing comma if present
-                    fixedContent = fixedContent.replace(/,\s*$/, '');
-                    break;
-                }
-                stringStart = fixedContent.lastIndexOf('"', stringStart - 1);
-            }
-        } else {
-            fixedContent = fixedContent.substring(0, lastValidChar + 1);
-        }
-
-        // Step 2: Close incomplete arrays
-        let openBrackets = (fixedContent.match(/\[/g) || []).length;
-        let closeBrackets = (fixedContent.match(/\]/g) || []).length;
-        while (openBrackets > closeBrackets) {
-            fixedContent = fixedContent.trim().replace(/,\s*$/, '') + ']';
-            closeBrackets++;
-        }
-
-        // Step 3: Close incomplete objects
-        let openBraces = (fixedContent.match(/\{/g) || []).length;
-        let closeBraces = (fixedContent.match(/\}/g) || []).length;
-        while (openBraces > closeBraces) {
-            fixedContent = fixedContent.trim().replace(/,\s*$/, '') + '}';
-            closeBraces++;
-        }
-
-        // Step 4: Remove trailing commas before closing braces/brackets
-        fixedContent = fixedContent.replace(/,\s*([}\]])/g, '$1');
-
+        // Try to parse the repaired JSON
         try {
             const classification = JSON.parse(fixedContent);
-
-            // Extract and validate new structure
-            const response_goals = Array.isArray(classification.response_goals) && classification.response_goals.length > 0
-                ? classification.response_goals
-                : ['respond appropriately'];
-
-            const tone_sets = classification.tone_sets && typeof classification.tone_sets === 'object'
-                ? classification.tone_sets
-                : {};
-
-            const variant_sets = classification.variant_sets && typeof classification.variant_sets === 'object'
-                ? classification.variant_sets
-                : {};
-
-            const goal_titles = classification.goal_titles && typeof classification.goal_titles === 'object'
-                ? classification.goal_titles
-                : {};
-
-            // Helper function to generate short title from goal text
-            const generateShortTitle = (goal) => {
-                const words = goal.split(' ');
-                if (words.length <= 3) return goal;
-                return words.slice(0, 2).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-            };
-
-            // Ensure tone_sets, variant_sets, and goal_titles have entries for each response_goal
-            response_goals.forEach(goal => {
-                if (!tone_sets[goal] || !Array.isArray(tone_sets[goal]) || tone_sets[goal].length === 0) {
-                    tone_sets[goal] = [classification.tone_needed || 'professional'];
-                }
-                const expectedNumVariants = apiConfig.numVariants || 4;
-                if (!variant_sets[goal] || !Array.isArray(variant_sets[goal]) || variant_sets[goal].length !== expectedNumVariants) {
-                    const defaultVariants = [
-                        'Friendly response',
-                        'Insightful response',
-                        'Polite response',
-                        'Professional neutral response',
-                        'Concise response',
-                        'Brief response',
-                        'Detailed response'
-                    ];
-                    variant_sets[goal] = defaultVariants.slice(0, expectedNumVariants);
-                }
-                if (!goal_titles[goal]) {
-                    goal_titles[goal] = generateShortTitle(goal);
-                }
-            });
-
-            // Get primary tone from first goal's tone_set
-            const primaryGoal = response_goals[0];
-            const tone_needed = (tone_sets[primaryGoal] && tone_sets[primaryGoal][0])
-                ? tone_sets[primaryGoal][0]
-                : (classification.tone_needed || 'professional');
-
-            return {
-                type: classification.type || 'other',
-                intent: classification.intent || 'general inquiry',
-                response_goals: response_goals,
-                goal_titles: goal_titles,
-                tone_needed: tone_needed,
-                tone_sets: tone_sets,
-                variant_sets: variant_sets,
-                recipient_name: classification.recipient_name || richContext.recipientName || '',
-                recipient_company: classification.recipient_company || richContext.recipientCompany || null,
-                key_topics: classification.key_topics || []
-            };
+            return processClassificationResult(classification, richContext);
         } catch (parseError) {
-            console.warn('Failed to parse classification JSON:', parseError);
-            console.warn('Original content length:', content.length);
-            console.warn('Fixed content length:', fixedContent.length);
-            console.warn('Content preview (first 500 chars):', content.substring(0, 500));
-            console.warn('Content preview (last 500 chars):', content.substring(Math.max(0, content.length - 500)));
-
-            // Try one more time with a more aggressive fix
+            // First parse failed, try aggressive fix - extract last complete JSON object
             try {
-                // Remove everything after the last complete JSON object
-                let lastCompleteJson = fixedContent;
                 const jsonObjects = [];
                 let depth = 0;
                 let start = 0;
@@ -357,121 +647,22 @@ Be highly context-specific for intent, goals, tones, and variants. Base everythi
                 }
 
                 if (jsonObjects.length > 0) {
-                    lastCompleteJson = jsonObjects[jsonObjects.length - 1];
+                    const lastCompleteJson = jsonObjects[jsonObjects.length - 1];
                     const classification = JSON.parse(lastCompleteJson);
-                    console.warn('Successfully parsed after aggressive fix');
-
-                    // Process the classification the same way as the normal path
-                    const response_goals = Array.isArray(classification.response_goals) && classification.response_goals.length > 0
-                        ? classification.response_goals
-                        : ['respond appropriately'];
-
-                    const tone_sets = classification.tone_sets && typeof classification.tone_sets === 'object'
-                        ? classification.tone_sets
-                        : {};
-
-                    const variant_sets = classification.variant_sets && typeof classification.variant_sets === 'object'
-                        ? classification.variant_sets
-                        : {};
-
-                    const goal_titles = classification.goal_titles && typeof classification.goal_titles === 'object'
-                        ? classification.goal_titles
-                        : {};
-
-                    // Helper function to generate short title from goal text
-                    const generateShortTitle = (goal) => {
-                        const words = goal.split(' ');
-                        if (words.length <= 3) return goal;
-                        return words.slice(0, 2).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-                    };
-
-                    response_goals.forEach(goal => {
-                        if (!tone_sets[goal] || !Array.isArray(tone_sets[goal]) || tone_sets[goal].length === 0) {
-                            tone_sets[goal] = [classification.tone_needed || 'professional'];
-                        }
-                        const expectedNumVariants = apiConfig.numVariants || 4;
-                        if (!variant_sets[goal] || !Array.isArray(variant_sets[goal]) || variant_sets[goal].length !== expectedNumVariants) {
-                            const defaultVariants = [
-                                'Friendly response',
-                                'Insightful response',
-                                'Polite response',
-                                'Professional neutral response',
-                                'Concise response',
-                                'Brief response',
-                                'Detailed response'
-                            ];
-                            variant_sets[goal] = defaultVariants.slice(0, expectedNumVariants);
-                        }
-                        if (!goal_titles[goal]) {
-                            goal_titles[goal] = generateShortTitle(goal);
-                        }
-                    });
-
-                    const primaryGoal = response_goals[0];
-                    const tone_needed = (tone_sets[primaryGoal] && tone_sets[primaryGoal][0])
-                        ? tone_sets[primaryGoal][0]
-                        : (classification.tone_needed || 'professional');
-
-                    return {
-                        type: classification.type || 'other',
-                        intent: classification.intent || 'general inquiry',
-                        response_goals: response_goals,
-                        goal_titles: goal_titles,
-                        tone_needed: tone_needed,
-                        tone_sets: tone_sets,
-                        variant_sets: variant_sets,
-                        recipient_name: classification.recipient_name || richContext.recipientName || '',
-                        recipient_company: classification.recipient_company || richContext.recipientCompany || null,
-                        key_topics: classification.key_topics || []
-                    };
+                    return processClassificationResult(classification, richContext);
                 } else {
                     throw new Error('No complete JSON object found');
                 }
             } catch (secondTryError) {
-                console.warn('Second parse attempt also failed:', secondTryError);
-                return {
-                    type: 'other',
-                    intent: 'general inquiry',
-                    response_goals: ['respond appropriately'],
-                    tone_needed: 'professional',
-                    tone_sets: { 'respond appropriately': ['professional'] },
-                    variant_sets: {
-                        'respond appropriately': [
-                            'Friendly response',
-                            'Insightful response',
-                            'Polite response',
-                            'Professional neutral response',
-                            'Concise response'
-                        ]
-                    },
-                    recipient_name: richContext.recipientName || '',
-                    recipient_company: richContext.recipientCompany || null,
-                    key_topics: []
-                };
+                // All parsing attempts failed, return defaults
+                console.error('[ResponseAble] Classification JSON parsing failed:', secondTryError.message);
+                return createDefaultClassification(richContext);
             }
         }
     } catch (error) {
-        console.warn('Email classification error:', error);
-        // Return safe defaults
-        return {
-            type: 'other',
-            intent: 'general inquiry',
-            response_goals: ['respond appropriately'],
-            tone_needed: 'professional',
-            tone_sets: { 'respond appropriately': ['professional'] },
-            variant_sets: {
-                'respond appropriately': [
-                    'Friendly response',
-                    'Insightful response',
-                    'Polite response',
-                    'Professional neutral response',
-                    'Concise response'
-                ]
-            },
-            recipient_name: richContext.recipientName || '',
-            recipient_company: richContext.recipientCompany || null,
-            key_topics: []
-        };
+        // API or network error, return defaults
+        console.error('[ResponseAble] Email classification error:', error.message);
+        return createDefaultClassification(richContext);
     }
 };
 
@@ -852,11 +1043,8 @@ const createIconOnlyButton = (buttonTooltip, platform) => {
             iconImg.src = iconUrl;
             iconImg.alt = 'ResponseAble';
             iconImg.style.cssText = 'width: 20px !important; height: 20px !important; max-width: 20px !important; max-height: 20px !important; display: inline-block !important; vertical-align: middle !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important; position: relative !important;';
-            iconImg.onerror = (e) => {
-                console.error('Failed to load raiconvector.png from:', iconUrl, e);
-            };
-            iconImg.onload = () => {
-                console.log('Successfully loaded raiconvector.png for comment button');
+            iconImg.onerror = () => {
+                console.error('[ResponseAble] Failed to load raiconvector.png');
             };
             generateButton.appendChild(iconImg);
         } catch (error) {
@@ -1077,21 +1265,10 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
         await loadApiConfig();
         const expectedNumVariants = apiConfig.numVariants || 4;
 
-        // Get default variants based on numVariants setting
-        const defaultVariants = [
-            'Friendly response',
-            'Insightful response',
-            'Polite response',
-            'Professional neutral response',
-            'Concise response',
-            'Brief response',
-            'Detailed response'
-        ];
-
         // Use provided variant set if available (from tab switching), otherwise get from classification
         const variantSet = classification._currentVariantSet || (classification.variant_sets && classification.variant_sets[currentGoal]
             ? classification.variant_sets[currentGoal]
-            : defaultVariants.slice(0, expectedNumVariants));
+            : DEFAULT_VARIANTS.slice(0, expectedNumVariants));
 
         const toneSet = classification.tone_sets && classification.tone_sets[currentGoal]
             ? classification.tone_sets[currentGoal]
@@ -1380,20 +1557,10 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
         : ['respond appropriately'];
 
     const currentGoal = responseGoals[0]; // Start with first goal
-    // Get default variants based on numVariants setting
-    const defaultVariants = [
-        'Friendly response',
-        'Insightful response',
-        'Polite response',
-        'Professional neutral response',
-        'Concise response',
-        'Brief response',
-        'Detailed response'
-    ];
     const expectedNumVariants = apiConfig.numVariants || 4;
     const variantSet = classification && classification.variant_sets && classification.variant_sets[currentGoal]
         ? classification.variant_sets[currentGoal]
-        : defaultVariants.slice(0, expectedNumVariants);
+        : DEFAULT_VARIANTS.slice(0, expectedNumVariants);
 
     const currentTone = classification && classification.tone_sets && classification.tone_sets[currentGoal] && classification.tone_sets[currentGoal][0]
         ? classification.tone_sets[currentGoal][0]
@@ -1733,7 +1900,6 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
         const draftsContainer = overlay.querySelector('#drafts-container');
         const loadingIndicator = overlay.querySelector('#loading-indicator');
         const regenerateStatus = overlay.querySelector('#regenerate-status');
-        const goalDescription = overlay.querySelector('#goal-description-text');
 
         // Get current goal (from active tab or default)
         const getCurrentGoal = () => {
@@ -1755,11 +1921,6 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
                 loadingIndicator.style.display = 'block';
 
                 try {
-                    // Get variant set for current goal
-                    const goalVariantSet = classification.variant_sets && classification.variant_sets[currentGoal]
-                        ? classification.variant_sets[currentGoal]
-                        : variantSet;
-
                     // Update classification to use new tone for this goal
                     const updatedClassification = { ...classification };
                     if (!updatedClassification.tone_sets) {
@@ -2003,21 +2164,16 @@ const injectCommentButton = () => {
         '.feed-shared-update-v2 div[contenteditable="true"][role="textbox"]'
     );
 
-    console.log('ResponseAble: Found', commentTextEditors.length, 'comment text editors');
-
     if (commentTextEditors.length === 0) {
-        return; // No comment editors found
+        return;
     }
 
-    commentTextEditors.forEach((editor, index) => {
+    commentTextEditors.forEach((editor) => {
         // Skip if already has our button
         const commentContainer = editor.closest('.comments-comment-box, .comment-shared-texteditor, .feed-shared-update-v2');
         if (commentContainer?.querySelector('.responseable-comment-button')) {
-            console.log('ResponseAble: Editor', index, 'already has button, skipping');
             return;
         }
-
-        console.log('ResponseAble: Processing editor', index, 'container:', !!commentContainer);
 
         // Find the container with class "display-flex justify-space-between"
         // This is the parent container that has the toolbar with emoji/image buttons
@@ -2027,11 +2183,9 @@ const injectCommentButton = () => {
         let current = editor;
         while (current && current !== document.body) {
             if (current.classList && current.classList.contains('justify-space-between')) {
-                // Found it! Now find the first child div with class "display-flex"
                 const displayFlexChild = current.querySelector('> .display-flex:first-child');
                 if (displayFlexChild) {
                     toolbarContainer = displayFlexChild;
-                    console.log('ResponseAble: Found toolbar via justify-space-between method');
                     break;
                 }
             }
@@ -2041,27 +2195,19 @@ const injectCommentButton = () => {
         // If not found with that approach, try finding by the emoji button
         if (!toolbarContainer) {
             const emojiButton = commentContainer?.querySelector('button.comments-comment-box__emoji-picker-trigger, button[aria-label*="Emoji"]');
-            console.log('ResponseAble: Emoji button found:', !!emojiButton);
             if (emojiButton) {
-                // Find the parent div with class "display-flex" that contains both emoji and image buttons
                 let parent = emojiButton.parentElement;
                 while (parent && parent !== document.body) {
                     if (parent.classList && parent.classList.contains('display-flex')) {
-                        // Check if this container has both emoji and image buttons
                         const hasImageButton = parent.querySelector('button.comments-comment-box__detour-icons, button[aria-label*="photo"], button[aria-label*="image"]');
                         if (hasImageButton) {
                             toolbarContainer = parent;
-                            console.log('ResponseAble: Found toolbar via emoji button method');
                             break;
                         }
                     }
                     parent = parent.parentElement;
                 }
             }
-        }
-
-        if (!toolbarContainer) {
-            console.log('ResponseAble: Toolbar container not found for editor', index);
         }
 
         if (toolbarContainer) {
@@ -2078,13 +2224,9 @@ const injectCommentButton = () => {
             const firstChild = toolbarContainer.firstElementChild;
             if (firstChild) {
                 toolbarContainer.insertBefore(commentButton, firstChild);
-                console.log('ResponseAble: Comment button inserted before first child');
             } else {
                 toolbarContainer.appendChild(commentButton);
-                console.log('ResponseAble: Comment button appended to toolbar');
             }
-        } else {
-            console.log('ResponseAble: Toolbar container not found for comment editor');
         }
     });
 };
