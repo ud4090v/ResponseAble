@@ -283,7 +283,7 @@ const extractUserEmails = (platform, richContext) => {
                 item.querySelector('[aria-label*="Sent"]') ||
                 item.querySelector('.g2, .g3, .g4, .g5, .g6, .g7, .g8, .g9, .gA, .gB'); // Gmail sent message classes
 
-            if (hasSentLabel || sentIndicator) {
+            if (hasSentLabel) {
                 const messageDiv = item.querySelector('div[dir="ltr"], div[aria-label="Message Body"]');
                 if (messageDiv && messageDiv.getAttribute('role') !== 'textbox') {
                     const text = messageDiv.innerText?.trim() || messageDiv.textContent?.trim() || '';
@@ -490,13 +490,23 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         ).join(', ');
 
         // Step 1: Determine email type based on packages
+        // CRITICAL: This determines the type based on the SPECIFIC email being replied to, NOT the overall thread
         const typeDeterminationPrompt = `The user has access to the following specialized packages:
 
 ${typesWithContext}
 
 Analyze the provided email context and determine which package it best fits.
 
-CRITICAL: Prioritize the LATEST email when determining the type. While you should consider the entire thread for context, the type should primarily be based on what the sender is doing in their MOST RECENT message. Use thread history only for background understanding, not as the primary basis for type determination.
+CRITICAL CONTEXT HANDLING:
+- You will receive TWO sections: "EMAIL BEING REPLIED TO" and optionally "PREVIOUS THREAD HISTORY"
+- The "EMAIL BEING REPLIED TO" is the SPECIFIC email the user clicked "Reply" on - this could be ANY email in the thread, not necessarily the latest
+- For example, in a 25-email thread about a job offer, if the user replies to email #9 which asks "Did you receive the background check email?", you should classify based on that SPECIFIC question, NOT the overall job offer topic
+- The thread history is ONLY for understanding the broader conversation context - DO NOT use it to determine the type
+
+CLASSIFICATION RULES:
+- Determine the type based SOLELY on what the sender is asking/doing in the "EMAIL BEING REPLIED TO" section
+- If the specific email is a simple follow-up question (e.g., "Did you receive X?"), classify it as "generic" or the most appropriate simple type, NOT based on the thread's main topic
+- The thread history should NEVER override the specific email's classification
 
 Return ONLY a valid JSON object with exactly this structure:
 {
@@ -508,7 +518,7 @@ Return ONLY a valid JSON object with exactly this structure:
     "contextSpecific": string       // full contextSpecific from the package
   },
   "confidence": number (0.0 to 1.0), // how strong the match is
-  "reason": string                  // brief explanation of the match
+  "reason": string                  // brief explanation - must reference the SPECIFIC email being replied to
 }
 
 Rules:
@@ -516,7 +526,7 @@ Rules:
 - Return the COMPLETE matched_type object including name, description, intent, roleDescription, and contextSpecific from the matched package.
 - If no package strongly matches, return the "generic" package with all its attributes.
 - Be precise and use both description and intent to guide your decision.
-- PRIORITIZE the latest email content when making your determination.`;
+- PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO - ignore thread history for type determination.`;
 
         // Extract the actual email being replied to and thread history separately
         // sourceMessageText is the ACTUAL email being replied to (not latest, but the specific one)
@@ -1212,95 +1222,169 @@ const platformAdapters = {
                 .map(div => div.innerText.trim())
                 .filter(text => text && text.length > 0 && !text.includes('Generate') && !text.includes('Respond'));
         },
-        // Get detailed information about the email being replied to
+        // Get detailed information about the SPECIFIC email being replied to
+        // CRITICAL: This function extracts the email the user clicked "Reply" on, NOT the latest email in the thread
+        // When replying to email #9 in a 25-email thread, this should return email #9's content
         getRepliedToEmailDetails: () => {
             // Subject - always the compose input (includes "Re:" for replies)
             const subjectInput = document.querySelector('input[aria-label="Subject"], input[name="subjectbox"]');
             const subject = subjectInput ? subjectInput.value : '';
 
-            // Sender of the replied-to message - look for the header above the quote (name and email)
-            // Try multiple selectors to find the sender header
-            let senderHeader = document.querySelector('div.iw, h3.iw, div.quoted_text ~ div.iw');
-
-            // If not found, try to find it near the quoted content
-            if (!senderHeader) {
-                const quotedBodyElement = document.querySelector('div.gmail_quote, blockquote.gmail_quote');
-                if (quotedBodyElement) {
-                    // Look for header elements before the quote
-                    let currentElement = quotedBodyElement.previousElementSibling;
-                    while (currentElement && !senderHeader) {
-                        if (currentElement.classList.contains('iw') ||
-                            currentElement.querySelector('span[name], span[email]')) {
-                            senderHeader = currentElement;
-                            break;
-                        }
-                        currentElement = currentElement.previousElementSibling;
-                    }
-                }
-            }
-
-            // Also try finding sender info from the email being replied to div
-            if (!senderHeader) {
-                const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
-                if (emailBeingRepliedTo) {
-                    const container = emailBeingRepliedTo.closest('[role="listitem"]') || emailBeingRepliedTo.parentElement;
-                    if (container) {
-                        senderHeader = container.querySelector('div.iw, h3.iw, span[name], span[email]')?.closest('div') ||
-                            container.querySelector('span[name], span[email]')?.parentElement;
-                    }
-                }
-            }
-
             let senderName = '';
             let senderEmail = '';
+            let body = '';
 
-            if (senderHeader) {
-                // Try to get name from span[name] attribute
-                const nameSpan = senderHeader.querySelector('span[name]');
-                if (nameSpan) {
-                    senderName = nameSpan.getAttribute('name') || '';
+            // STRATEGY 1: Extract from Gmail's quoted content in the compose window
+            // When you click "Reply" on a specific email, Gmail quotes that email in the compose window
+            // This is the MOST RELIABLE way to get the specific email being replied to
+            const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
+            if (composeBody) {
+                // Look for the quoted content within or near the compose area
+                // Gmail uses various selectors for quoted content
+                const quotedSelectors = [
+                    'div.gmail_quote',
+                    'blockquote.gmail_quote',
+                    'div[data-smartmail="gmail_signature"] ~ div',
+                    '.gmail_attr + div',  // Attribution line followed by quote
+                    'div.gmail_extra div.gmail_quote'
+                ];
+
+                let quotedContent = null;
+                for (const selector of quotedSelectors) {
+                    // Search in the compose container and its parent
+                    const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9') || composeBody.parentElement;
+                    if (composeContainer) {
+                        quotedContent = composeContainer.querySelector(selector);
+                        if (quotedContent) break;
+                    }
+                    // Also try document-level search
+                    if (!quotedContent) {
+                        quotedContent = document.querySelector(selector);
+                    }
                 }
 
-                // Try to get email from span[email] attribute
-                const emailSpan = senderHeader.querySelector('span[email]');
-                if (emailSpan) {
-                    senderEmail = emailSpan.getAttribute('email') || '';
-                }
+                if (quotedContent) {
+                    body = quotedContent.innerText?.trim() || quotedContent.textContent?.trim() || '';
 
-                // If name not found, try extracting from text content
-                if (!senderName) {
-                    const text = senderHeader.innerText || senderHeader.textContent || '';
-                    // Look for patterns like "Name <email@domain.com>" or "Name (Company)"
-                    const nameMatch = text.match(/^([^<\(]+?)(?:\s*<|$)/);
-                    if (nameMatch) {
-                        senderName = nameMatch[1].trim();
-                    } else {
-                        senderName = text.trim();
+                    // Extract sender info from the attribution line (e.g., "On Jan 5, 2026, John Doe <john@example.com> wrote:")
+                    const attrLine = quotedContent.previousElementSibling;
+                    if (attrLine) {
+                        const attrText = attrLine.innerText || attrLine.textContent || '';
+                        // Pattern: "On [date], [Name] <[email]> wrote:"
+                        const attrMatch = attrText.match(/On\s+.+?,\s+(.+?)\s*<([^>]+)>\s*wrote:/i);
+                        if (attrMatch) {
+                            senderName = attrMatch[1].trim();
+                            senderEmail = attrMatch[2].trim();
+                        } else {
+                            // Try simpler pattern: "[Name] <[email]>"
+                            const simpleMatch = attrText.match(/([^<]+?)\s*<([^>]+)>/);
+                            if (simpleMatch) {
+                                senderName = simpleMatch[1].trim();
+                                senderEmail = simpleMatch[2].trim();
+                            }
+                        }
                     }
                 }
             }
 
-            // Body of the replied-to message - the quoted content
-            const quotedBodyElement = document.querySelector('div.gmail_quote, blockquote.gmail_quote');
-            let body = '';
-            if (quotedBodyElement) {
-                body = quotedBodyElement.innerText?.trim() || quotedBodyElement.textContent?.trim() || '';
-            } else {
-                // Fallback: get body from the email being replied to div
+            // STRATEGY 2: If no quoted content found, use the email div above the compose box
+            // This is the email the user is replying to in the thread view
+            if (!body) {
                 const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
                 if (emailBeingRepliedTo) {
                     body = emailBeingRepliedTo.innerText?.trim() || emailBeingRepliedTo.textContent?.trim() || '';
+
+                    // Get sender info from the message container
+                    const container = emailBeingRepliedTo.closest('[role="listitem"]') || emailBeingRepliedTo.parentElement;
+                    if (container) {
+                        // Look for sender name/email in the header
+                        const nameSpan = container.querySelector('span[name]');
+                        const emailSpan = container.querySelector('span[email]');
+                        if (nameSpan) senderName = nameSpan.getAttribute('name') || '';
+                        if (emailSpan) senderEmail = emailSpan.getAttribute('email') || '';
+                    }
+                }
+            }
+
+            // STRATEGY 3: Fallback - look for sender header elements
+            if (!senderName) {
+                // Try multiple selectors to find the sender header
+                let senderHeader = document.querySelector('div.iw, h3.iw, div.quoted_text ~ div.iw');
+
+                // If not found, try to find it near the quoted content
+                if (!senderHeader) {
+                    const quotedBodyElement = document.querySelector('div.gmail_quote, blockquote.gmail_quote');
+                    if (quotedBodyElement) {
+                        let currentElement = quotedBodyElement.previousElementSibling;
+                        while (currentElement && !senderHeader) {
+                            if (currentElement.classList.contains('iw') ||
+                                currentElement.querySelector('span[name], span[email]')) {
+                                senderHeader = currentElement;
+                                break;
+                            }
+                            currentElement = currentElement.previousElementSibling;
+                        }
+                    }
+                }
+
+                // Also try finding sender info from the email being replied to div
+                if (!senderHeader) {
+                    const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
+                    if (emailBeingRepliedTo) {
+                        const container = emailBeingRepliedTo.closest('[role="listitem"]') || emailBeingRepliedTo.parentElement;
+                        if (container) {
+                            senderHeader = container.querySelector('div.iw, h3.iw, span[name], span[email]')?.closest('div') ||
+                                container.querySelector('span[name], span[email]')?.parentElement;
+                        }
+                    }
+                }
+
+                if (senderHeader) {
+                    // Try to get name from span[name] attribute
+                    const nameSpan = senderHeader.querySelector('span[name]');
+                    if (nameSpan) {
+                        senderName = nameSpan.getAttribute('name') || '';
+                    }
+
+                    // Try to get email from span[email] attribute
+                    const emailSpan = senderHeader.querySelector('span[email]');
+                    if (emailSpan) {
+                        senderEmail = emailSpan.getAttribute('email') || '';
+                    }
+
+                    // If name not found, try extracting from text content
+                    if (!senderName) {
+                        const text = senderHeader.innerText || senderHeader.textContent || '';
+                        // Look for patterns like "Name <email@domain.com>" or "Name (Company)"
+                        const nameMatch = text.match(/^([^<(]+?)(?:\s*<|$)/);
+                        if (nameMatch) {
+                            senderName = nameMatch[1].trim();
+                        } else {
+                            senderName = text.trim();
+                        }
+                    }
                 }
             }
 
             // Recipients (To/CC) of the replied-to message
             // For replies, Gmail pre-fills the compose fields with the original sender
-            // The "To" field contains the person you're replying to (the sender of the original email)
             const toInput = document.querySelector('input[aria-label="To recipients"], input[name="to"], input[aria-label="To"]');
             const toRecipients = toInput ? toInput.value : '';
 
             const ccInput = document.querySelector('input[name="cc"], input[aria-label="Cc"]');
             const ccRecipients = ccInput ? ccInput.value : '';
+
+            // Clean up the body - remove common noise
+            if (body) {
+                body = body
+                    .replace(/^On .+ wrote:\s*/i, '')  // Remove attribution line if it got included
+                    .replace(/^-+\s*Original Message\s*-+/im, '')  // Remove "Original Message" header
+                    .replace(/^From:.+$/m, '')  // Remove From: line
+                    .replace(/^Sent:.+$/m, '')  // Remove Sent: line
+                    .replace(/^To:.+$/m, '')  // Remove To: line
+                    .replace(/^Subject:.+$/m, '')  // Remove Subject: line
+                    .trim();
+            }
 
             return {
                 subject,
@@ -1427,8 +1511,9 @@ const platformAdapters = {
             const emailElements = Array.from(messageContainer.querySelectorAll('[email]'))
                 .filter(elem => messageContainer.contains(elem))
                 .sort((a, b) => {
-                    const aDist = Math.abs(a.compareDocumentPosition(latestMessageDiv));
-                    const bDist = Math.abs(b.compareDocumentPosition(latestMessageDiv));
+                    // Sort by proximity to the email being replied to
+                    const aDist = Math.abs(a.compareDocumentPosition(emailBeingRepliedTo));
+                    const bDist = Math.abs(b.compareDocumentPosition(emailBeingRepliedTo));
                     return aDist - bDist;
                 });
 
@@ -2106,7 +2191,17 @@ Write in a way that sounds like YOU wrote it, matching your typical communicatio
 
             return `You are ${roleDescription}. Generate exactly ${variantCount} complete, personalized reply options based on the source email provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"}${classification.recipient_company ? ` at ${classification.recipient_company}` : ""}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""} ${contextSpecific}${styleInstructions}
 
-CRITICAL: You are replying to the LATEST email ONLY. The LATEST email section below is what you must respond to. Directly address the content, questions, and intent of the LATEST email. The thread history is provided ONLY for background context - DO NOT respond to earlier messages in the thread. IGNORE the thread history when determining what to respond to. Your response must ONLY address what the sender said in their MOST RECENT message (the LATEST email section).
+CRITICAL CONTEXT HANDLING:
+- You will receive TWO sections: "EMAIL BEING REPLIED TO" and optionally "PREVIOUS THREAD HISTORY"
+- The "EMAIL BEING REPLIED TO" is the SPECIFIC email the user clicked "Reply" on - this could be ANY email in the thread, not necessarily the latest
+- For example, in a 25-email job offer thread, if the user replies to email #9 which asks "Did you receive the background check email?", your response should ONLY address that question (e.g., "Yes, I received it" or "No, I haven't received it yet"), NOT express enthusiasm about the job offer
+- The thread history is ONLY for understanding the broader conversation context - DO NOT respond to topics from thread history
+
+RESPONSE RULES:
+- Directly address ONLY the content, questions, and intent of the "EMAIL BEING REPLIED TO" section
+- If the specific email asks a simple question (e.g., "Did you receive X?"), give a direct answer to that question
+- DO NOT bring up topics from thread history unless they are directly relevant to answering the specific email
+- Your response must ONLY address what the sender said in the "EMAIL BEING REPLIED TO" section
 
 IMPORTANT FORMATTING REQUIREMENTS:
 - Each variant should be a complete email ready to send, including greeting, body text, and closing
@@ -2176,7 +2271,17 @@ Write in a way that sounds like YOU wrote it, matching your typical communicatio
         const systemPrompt = platform === 'linkedin'
             ? `You are a professional LinkedIn message writer. Generate exactly ${variantSet.length} complete, personalized reply options based on the source message provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"} at ${classification.recipient_company || "their company"}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""}${linkedinStyleInstructions}
 
-CRITICAL: You are replying to the LATEST message ONLY. The LATEST message section below is what you must respond to. Directly address the content, questions, and intent of the LATEST message. The conversation history is provided ONLY for background context - DO NOT respond to earlier messages in the conversation. IGNORE the conversation history when determining what to respond to. Your response must ONLY address what the sender said in their MOST RECENT message (the LATEST message section).
+CRITICAL CONTEXT HANDLING:
+- You will receive TWO sections: "MESSAGE BEING REPLIED TO" and optionally "PREVIOUS CONVERSATION HISTORY"
+- The "MESSAGE BEING REPLIED TO" is the SPECIFIC message the user clicked "Reply" on - this could be ANY message in the conversation, not necessarily the latest
+- For example, in a long conversation about a job opportunity, if the user replies to a message asking "Did you receive my portfolio?", your response should ONLY address that question, NOT express enthusiasm about the opportunity
+- The conversation history is ONLY for understanding the broader context - DO NOT respond to topics from conversation history
+
+RESPONSE RULES:
+- Directly address ONLY the content, questions, and intent of the "MESSAGE BEING REPLIED TO" section
+- If the specific message asks a simple question (e.g., "Did you receive X?"), give a direct answer to that question
+- DO NOT bring up topics from conversation history unless they are directly relevant to answering the specific message
+- Your response must ONLY address what the sender said in the "MESSAGE BEING REPLIED TO" section
 
 IMPORTANT FORMATTING REQUIREMENTS:
 - Each variant should be a complete message ready to send, including greeting, body text, and closing
