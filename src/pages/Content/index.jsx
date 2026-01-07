@@ -540,32 +540,6 @@ Rules:
         // Use senderName if provided (extracted from the email being replied to), otherwise fall back to richContext
         const actualSenderName = senderName || richContext.recipientName || '';
 
-        // Create a TRUNCATED thread context summary for tone/clarification purposes
-        // This is much shorter than the full thread to avoid overwhelming the FOCUS_EMAIL's intent
-        // Used for: clarifying ambiguous references, determining conversation tone/dynamic
-        // NOT used for: determining intent or response goals (those come from FOCUS_EMAIL only)
-        const createThreadContextSummary = (fullThread) => {
-            if (!fullThread || fullThread.length < 50) return '';
-            
-            // Take only the last 2-3 messages, each truncated to ~300 chars
-            const messages = fullThread.split(/\n---\n|\n\n---\n\n/);
-            const recentMessages = messages.slice(-3);
-            const truncatedMessages = recentMessages.map(msg => {
-                const trimmed = msg.trim();
-                if (trimmed.length > 300) {
-                    return trimmed.substring(0, 300) + '...';
-                }
-                return trimmed;
-            }).filter(msg => msg.length > 20);
-            
-            if (truncatedMessages.length === 0) return '';
-            
-            // Create a brief summary format
-            return `[Brief context from ${truncatedMessages.length} recent message(s) - for tone/clarification only]\n${truncatedMessages.join('\n---\n')}`;
-        };
-        
-        const threadContextSummary = createThreadContextSummary(previousThreadHistory);
-
         // First API call: Determine type
         // CRITICAL: Do NOT include thread history here - LLMs are influenced by text even when told to "ignore" it
         // The user's test showed that the same email text produces correct classification when standalone,
@@ -619,69 +593,151 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
         const packageName = matchedType.name;
         const typeIntent = matchedType.intent;
 
-        // Step 2: Full classification using the matched type
-        // Thread context summary is included for tone/clarification, but intent/goals come from FOCUS_EMAIL only
-        const classificationPrompt = `You are an expert email classifier. Analyze the ${platform === 'linkedin' ? 'message' : 'email'} and return ONLY a JSON object with:
+        // ============================================================================
+        // STEP 2: INTENT/GOALS DETERMINATION - FOCUS_EMAIL ONLY (COMPLETELY ISOLATED)
+        // ============================================================================
+        // CRITICAL: This call sees ONLY the FOCUS_EMAIL - NO thread history at all
+        // This ensures intent and goals are determined solely from the specific email
+        const intentGoalsPrompt = `You are an expert email classifier. Analyze ONLY the provided email and return a JSON object with:
 {
-  "type": "${packageName}",
-  "intent": Determine the sender's primary intent from the recipient's perspective. Base this ONLY on the FOCUS_EMAIL content. The intent should be specific, natural, and contextual, reflecting what the sender is trying to achieve in THIS specific email.
-  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. Base these ONLY on what the sender is specifically asking, requesting, or doing in the FOCUS_EMAIL. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X", NOT "Express interest". The goals must directly address what the sender is asking for in THIS email.
+  "intent": Determine the sender's primary intent from the recipient's perspective. What is the sender specifically asking, requesting, or doing in THIS email? Be specific and contextual.
+  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. Base these ONLY on what the sender is specifically asking or doing. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X", NOT "Express interest in opportunity". The goals must directly address what the sender is asking for.
   "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
-  "tone_needed": Determine the single most appropriate tone for the reply. You may use the THREAD_CONTEXT to understand the overall conversation dynamic and relationship.
-  "tone_sets": Object with keys matching response_goals, each containing array of suggested ranked tone strings. You may use the THREAD_CONTEXT to inform appropriate tones for the relationship.
   "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
-  "recipient_name": string (the name of the person who SENT the FOCUS_EMAIL${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
-  "recipient_company": string or null (the company of the person who SENT the FOCUS_EMAIL),
-  "key_topics": array of strings (max 5, based on the FOCUS_EMAIL content)
+  "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
+  "recipient_company": string or null (the company of the person who SENT this email),
+  "key_topics": array of strings (max 5, based on the email content)
 }
 
-CRITICAL INSTRUCTIONS:
-1. The type has been determined as "${packageName}". Use this type value.
-2. FOCUS_EMAIL is the PRIMARY input. Base "intent" and "response_goals" ONLY on the FOCUS_EMAIL content.
-3. THREAD_CONTEXT (if provided) is for SUPPLEMENTARY purposes only:
-   - Use it to clarify ambiguous references in the FOCUS_EMAIL (e.g., "the offer email" refers to what?)
-   - Use it to understand the overall tone and relationship dynamic
-   - Use it to identify names, companies, or context mentioned in the FOCUS_EMAIL
-   - DO NOT let it override the FOCUS_EMAIL's intent or goals
-4. If the FOCUS_EMAIL asks a question (e.g., "Did you receive X?"), the intent and goals must be about answering that question, NOT about the broader thread topic.
-5. ${actualSenderName ? `The sender's name is "${actualSenderName}" - use this for recipient_name.` : 'Extract the sender\'s name from the FOCUS_EMAIL content.'}
-6. Be context-specific and realistic. The response should directly address what the FOCUS_EMAIL is asking for.
-7. Return ONLY valid JSON, no other text.`;
+CRITICAL: Focus ONLY on what THIS specific email is asking or doing. If it asks a question like "Did you receive X?", the intent must be about that question and goals must be about answering it.
+Return ONLY valid JSON, no other text.`;
 
-        // Include truncated thread context for tone/clarification, but keep it small to avoid overwhelming FOCUS_EMAIL
-        const messages = [
+        const intentGoalsMessages = [
             {
                 role: 'system',
-                content: classificationPrompt
+                content: intentGoalsPrompt
             },
             {
                 role: 'user',
-                content: `=== FOCUS_EMAIL (the specific email being replied to) ===
-${emailBeingRepliedTo}
+                content: `${emailBeingRepliedTo}
 
-${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}${threadContextSummary ? `\n\n=== THREAD_CONTEXT (for tone/clarification only - DO NOT use for intent/goals) ===\n${threadContextSummary}` : ''}`
+${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
             }
         ];
 
-        let data;
+        let intentGoalsResult;
         try {
-            data = await callProxyAPI(
+            const intentGoalsData = await callProxyAPI(
                 apiConfig.provider,
                 classificationModel,
-                messages,
-                0.3,  // temperature
-                2000  // max_tokens - increased to ensure complete JSON responses for complex classifications
+                intentGoalsMessages,
+                0.3,
+                1500
             );
-        } catch (fetchError) {
-            // Handle network errors (CORS, connection issues, etc.)
-            const networkError = fetchError.message || String(fetchError);
-            console.error('Network error during classification API call:', networkError);
-            if (networkError.includes('Failed to fetch') || networkError.includes('NetworkError')) {
-                throw new Error(`Network error: Unable to connect to ${apiConfig.provider} API. Please check:\n1. Your internet connection\n2. CORS settings (if testing locally)\n3. API endpoint is accessible\n\nError: ${networkError}`);
+            let intentGoalsContent = intentGoalsData.choices?.[0]?.message?.content || '{}';
+            intentGoalsContent = intentGoalsContent.trim();
+            if (intentGoalsContent.startsWith('```json')) {
+                intentGoalsContent = intentGoalsContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+            } else if (intentGoalsContent.startsWith('```')) {
+                intentGoalsContent = intentGoalsContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
             }
-            throw new Error(`Network error: ${networkError}`);
+            intentGoalsResult = JSON.parse(intentGoalsContent);
+        } catch (intentError) {
+            console.error('Intent/Goals determination error:', intentError);
+            // Fallback with generic values
+            intentGoalsResult = {
+                intent: 'General inquiry or follow-up',
+                response_goals: ['Respond appropriately', 'Address the question', 'Provide information'],
+                goal_titles: {},
+                variant_sets: {},
+                recipient_name: actualSenderName || 'there',
+                recipient_company: null,
+                key_topics: []
+            };
         }
-        let content = data.choices?.[0]?.message?.content || '{}';
+
+        // ============================================================================
+        // STEP 3: TONE/DYNAMIC DETERMINATION - CAN USE FULL THREAD
+        // ============================================================================
+        // This call can see the full thread to determine appropriate tone and dynamic
+        // The intent and goals are already locked from Step 2
+        const toneDynamicPrompt = `You are an expert at analyzing conversation tone and dynamics. Based on the email thread provided, determine the optimal tone for a reply.
+
+The intent has already been determined as: "${intentGoalsResult.intent}"
+The response goals are: ${JSON.stringify(intentGoalsResult.response_goals)}
+
+Analyze the conversation history to determine:
+1. The overall relationship dynamic (formal/informal, professional/casual)
+2. The appropriate tone for responding
+3. Tone options for each response goal
+
+Return ONLY a JSON object with:
+{
+  "tone_needed": string (the single most appropriate tone for the reply based on the conversation dynamic),
+  "tone_sets": Object with keys matching these goals: ${JSON.stringify(intentGoalsResult.response_goals)}, each containing array of 3-4 suggested tone strings ranked by appropriateness for the relationship
+}
+
+Return ONLY valid JSON, no other text.`;
+
+        const toneDynamicMessages = [
+            {
+                role: 'system',
+                content: toneDynamicPrompt
+            },
+            {
+                role: 'user',
+                content: `=== SPECIFIC EMAIL BEING REPLIED TO ===
+${emailBeingRepliedTo}
+
+${previousThreadHistory ? `=== FULL THREAD HISTORY (for tone/dynamic analysis) ===\n${previousThreadHistory}` : '(No previous thread history available)'}`
+            }
+        ];
+
+        let toneResult;
+        try {
+            const toneData = await callProxyAPI(
+                apiConfig.provider,
+                classificationModel,
+                toneDynamicMessages,
+                0.3,
+                800
+            );
+            let toneContent = toneData.choices?.[0]?.message?.content || '{}';
+            toneContent = toneContent.trim();
+            if (toneContent.startsWith('```json')) {
+                toneContent = toneContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+            } else if (toneContent.startsWith('```')) {
+                toneContent = toneContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+            }
+            toneResult = JSON.parse(toneContent);
+        } catch (toneError) {
+            console.error('Tone determination error:', toneError);
+            // Fallback with professional tone
+            toneResult = {
+                tone_needed: 'Professional and friendly',
+                tone_sets: {}
+            };
+        }
+
+        // ============================================================================
+        // COMBINE RESULTS FROM ALL STEPS
+        // ============================================================================
+        // Merge results: type from Step 1, intent/goals from Step 2, tone from Step 3
+        const combinedResult = {
+            type: packageName,
+            intent: intentGoalsResult.intent,
+            response_goals: intentGoalsResult.response_goals,
+            goal_titles: intentGoalsResult.goal_titles || {},
+            tone_needed: toneResult.tone_needed || 'Professional',
+            tone_sets: toneResult.tone_sets || {},
+            variant_sets: intentGoalsResult.variant_sets || {},
+            recipient_name: intentGoalsResult.recipient_name || actualSenderName || 'there',
+            recipient_company: intentGoalsResult.recipient_company || null,
+            key_topics: intentGoalsResult.key_topics || []
+        };
+
+        // Use the combined result as our content for further processing
+        let content = JSON.stringify(combinedResult);
 
         // Clean up content - remove markdown code blocks if present
         content = content.trim();
