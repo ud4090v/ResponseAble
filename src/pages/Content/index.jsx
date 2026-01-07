@@ -223,8 +223,8 @@ const detectPlatform = () => {
     return null;
 };
 
-// User packages for email type classification
-const userPackages = [
+// Master list of all available packages for email type classification
+const ALL_PACKAGES = [
     {
         "name": "sales",
         "description": "emails about deals, follow-ups, objections, meetings, and closing business",
@@ -268,6 +268,37 @@ const userPackages = [
         "contextSpecific": "Carefully analyze the source email to understand the context, relationship, and intent. Respond appropriately from the recipient's perspective, considering the specific situation and relationship dynamics."
     }
 ];
+
+// Function to get user-selected packages from storage, defaulting to ['generic'] if none selected
+const getUserPackages = async () => {
+    return new Promise((resolve) => {
+        const browserAPI = typeof chrome !== 'undefined' && chrome.storage ? chrome : (typeof browser !== 'undefined' && browser.storage ? browser : null);
+        if (!browserAPI || !browserAPI.storage) {
+            // Fallback to generic if storage is not available
+            resolve(ALL_PACKAGES.filter(p => p.name === 'generic'));
+            return;
+        }
+
+        browserAPI.storage.sync.get(['selectedPackages'], (result) => {
+            const selectedPackageNames = result.selectedPackages && Array.isArray(result.selectedPackages) && result.selectedPackages.length > 0
+                ? result.selectedPackages
+                : ['generic']; // Default to generic if none selected
+
+            // Filter ALL_PACKAGES to only include selected packages
+            const userPackages = ALL_PACKAGES.filter(p => selectedPackageNames.includes(p.name));
+
+            // Ensure generic is always available as fallback
+            if (userPackages.length === 0 || !userPackages.find(p => p.name === 'generic')) {
+                const genericPackage = ALL_PACKAGES.find(p => p.name === 'generic');
+                if (genericPackage) {
+                    userPackages.push(genericPackage);
+                }
+            }
+
+            resolve(userPackages);
+        });
+    });
+};
 
 // Extract user's sent emails from thread (for style analysis)
 const extractUserEmails = (platform, richContext) => {
@@ -484,6 +515,9 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         // Get numVariants for the classification prompt
         const numVariants = apiConfig.numVariants || 4;
 
+        // Get user-selected packages from storage (defaults to ['generic'] if none selected)
+        const userPackages = await getUserPackages();
+
         // Format packages as string for type determination prompt
         const typesWithContext = userPackages.map(p =>
             `${p.name}: "${p.description}" (intent: ${p.intent}, roleDescription: ${p.roleDescription}, contextSpecific: ${p.contextSpecific})`
@@ -598,6 +632,7 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
         // ============================================================================
         // CRITICAL: This call sees ONLY the FOCUS_EMAIL - NO thread history at all
         // This ensures intent and goals are determined solely from the specific email
+        // BUT: We now include type-specific context to guide appropriate intent and variant generation
         const intentGoalsPrompt = `You are an expert email classifier. Analyze ONLY the provided email and return a JSON object with:
 {
   "intent": Determine the sender's primary intent from the recipient's perspective. What is the sender specifically asking, requesting, or doing in THIS email? Be specific and contextual.
@@ -609,7 +644,14 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
   "key_topics": array of strings (max 5, based on the email content)
 }
 
-CRITICAL: Focus ONLY on what THIS specific email is asking or doing. If it asks a question like "Did you receive X?", the intent must be about that question and goals must be about answering it.
+EMAIL TYPE CONTEXT:
+- Matched Type: ${packageName}
+- Type Description: ${matchedType.description}
+${typeIntent ? `- Type-Specific Intent Guidance: ${typeIntent}` : ''}
+
+CRITICAL INSTRUCTIONS:
+- Focus ONLY on what THIS specific email is asking or doing. If it asks a question like "Did you receive X?", the intent must be about that question and goals must be about answering it.
+${packageName === 'generic' ? '- IMPORTANT: This is a GENERIC email type. Keep the intent, goals, and variants truly generic and neutral. Do NOT assume business relationships, job contexts, or specific professional scenarios unless explicitly mentioned in the email. Generic means simple, straightforward, and context-neutral.' : ''}
 Return ONLY valid JSON, no other text.`;
 
         const intentGoalsMessages = [
@@ -1272,13 +1314,13 @@ const platformAdapters = {
         getThreadMessages: () => {
             const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
             const composeText = composeBody?.innerText?.trim() || '';
-            
+
             // Gmail message body selectors (same as getEmailBeingRepliedTo)
             const messageBodySelectors = [
                 'div.a3s.aiL',      // Primary Gmail message body class
                 'div.ii.gt',        // Alternative Gmail message class
             ];
-            
+
             let allMessageDivs = [];
             for (const selector of messageBodySelectors) {
                 const divs = document.querySelectorAll(selector);
@@ -1290,7 +1332,7 @@ const platformAdapters = {
                     break;
                 }
             }
-            
+
             return allMessageDivs
                 .map(div => div.innerText.trim())
                 .filter(text => text && text.length > 0 && !text.includes('Generate') && !text.includes('Respond'));
@@ -1318,10 +1360,10 @@ const platformAdapters = {
             if (composeBody) {
                 // Find the compose container - this is the parent that contains the compose form
                 // We search progressively outward to find a suitable container
-                const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') || 
-                                        composeBody.closest('form') ||
-                                        composeBody.parentElement?.parentElement?.parentElement;
-                
+                const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') ||
+                    composeBody.closest('form') ||
+                    composeBody.parentElement?.parentElement?.parentElement;
+
                 if (composeContainer) {
                     // Look for the quoted content ONLY within the compose container
                     // Gmail uses various selectors for quoted content
@@ -1344,11 +1386,11 @@ const platformAdapters = {
                         // Gmail often includes the entire thread history as nested quotes
                         // We want only Rusty's message, not TJ's original job offer below it
                         const clonedQuote = quotedContent.cloneNode(true);
-                        
+
                         // Remove all nested .gmail_quote and blockquote elements
                         const nestedQuotes = clonedQuote.querySelectorAll('div.gmail_quote, blockquote.gmail_quote, blockquote');
                         nestedQuotes.forEach(nested => nested.remove());
-                        
+
                         // Get the text after removing nested quotes
                         body = clonedQuote.innerText?.trim() || clonedQuote.textContent?.trim() || '';
 
@@ -1371,7 +1413,7 @@ const platformAdapters = {
                                 }
                             }
                         }
-                        
+
                         // Also look for attribution within the quote itself (sometimes Gmail puts it inside)
                         if (!senderName) {
                             const attrDiv = composeContainer.querySelector('.gmail_attr');
@@ -1397,16 +1439,16 @@ const platformAdapters = {
                     const clonedEmail = emailBeingRepliedTo.cloneNode(true);
                     const nestedQuotes = clonedEmail.querySelectorAll('div.gmail_quote, blockquote.gmail_quote, blockquote');
                     nestedQuotes.forEach(nested => nested.remove());
-                    
+
                     body = clonedEmail.innerText?.trim() || clonedEmail.textContent?.trim() || '';
 
                     // Get sender info from the message container
                     // CRITICAL FIX: Gmail uses div.adn.ads[data-message-id] as the message container
                     // The sender info (span.gD[email][name]) is inside this container
-                    const container = emailBeingRepliedTo.closest('div.adn.ads[data-message-id]') || 
-                                     emailBeingRepliedTo.closest('[data-message-id]') ||
-                                     emailBeingRepliedTo.closest('[role="listitem"]') || 
-                                     emailBeingRepliedTo.parentElement;
+                    const container = emailBeingRepliedTo.closest('div.adn.ads[data-message-id]') ||
+                        emailBeingRepliedTo.closest('[data-message-id]') ||
+                        emailBeingRepliedTo.closest('[role="listitem"]') ||
+                        emailBeingRepliedTo.parentElement;
                     if (container) {
                         // Look for sender name/email in the header using Gmail's span.gD selector
                         const senderSpan = container.querySelector('span.gD[email][name]');
@@ -1426,10 +1468,10 @@ const platformAdapters = {
 
             // STRATEGY 3: Fallback - look for sender header elements WITHIN the compose context
             if (!senderName && composeBody) {
-                const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') || 
-                                        composeBody.closest('form') ||
-                                        composeBody.parentElement?.parentElement?.parentElement;
-                
+                const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') ||
+                    composeBody.closest('form') ||
+                    composeBody.parentElement?.parentElement?.parentElement;
+
                 if (composeContainer) {
                     // Try to find sender header within compose container
                     let senderHeader = composeContainer.querySelector('div.iw, h3.iw');
@@ -1477,16 +1519,16 @@ const platformAdapters = {
                     }
                 }
             }
-            
+
             // STRATEGY 4: Last resort - use getEmailBeingRepliedTo for sender info
             // CRITICAL FIX: Use correct Gmail container selector (div.adn.ads[data-message-id])
             if (!senderName) {
                 const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
                 if (emailBeingRepliedTo) {
-                    const container = emailBeingRepliedTo.closest('div.adn.ads[data-message-id]') || 
-                                     emailBeingRepliedTo.closest('[data-message-id]') ||
-                                     emailBeingRepliedTo.closest('[role="listitem"]') || 
-                                     emailBeingRepliedTo.parentElement;
+                    const container = emailBeingRepliedTo.closest('div.adn.ads[data-message-id]') ||
+                        emailBeingRepliedTo.closest('[data-message-id]') ||
+                        emailBeingRepliedTo.closest('[role="listitem"]') ||
+                        emailBeingRepliedTo.parentElement;
                     if (container) {
                         // Look for sender using Gmail's span.gD selector first
                         const senderSpan = container.querySelector('span.gD[email][name]');
@@ -1518,7 +1560,7 @@ const platformAdapters = {
             if (body) {
                 // First, remove any leading attribution line
                 body = body.replace(/^On .+ wrote:\s*/i, '');
-                
+
                 // CRITICAL: Find and remove everything after common thread boundary markers
                 // These markers indicate where the replied-to email ends and older thread content begins
                 const threadBoundaryPatterns = [
@@ -1531,7 +1573,7 @@ const platformAdapters = {
                     /\n-{3,}\s*Forwarded message\s*-{3,}/i,  // "--- Forwarded message ---"
                     /\nBegin forwarded message:/i,        // Apple Mail style
                 ];
-                
+
                 // Find the earliest boundary marker and truncate there
                 let earliestBoundary = body.length;
                 for (const pattern of threadBoundaryPatterns) {
@@ -1540,12 +1582,12 @@ const platformAdapters = {
                         earliestBoundary = match.index;
                     }
                 }
-                
+
                 // Truncate at the earliest boundary
                 if (earliestBoundary < body.length) {
                     body = body.substring(0, earliestBoundary);
                 }
-                
+
                 // Additional cleanup for any remaining noise at the start
                 body = body
                     .replace(/^-+\s*Original Message\s*-+/im, '')  // Remove "Original Message" header at start
@@ -2234,8 +2276,8 @@ const injectGenerateButton = () => {
                     recipientName,
                     recipientCompany,
                     adapter,
-                    (draftsText) => {
-                        showDraftsOverlay(draftsText, context, platform, null, classification, regenerateContext);
+                    async (draftsText) => {
+                        await showDraftsOverlay(draftsText, context, platform, null, classification, regenerateContext);
                     },
                     regenerateContext  // Pass regenerateContext so function can access threadHistory
                 );
@@ -2397,6 +2439,9 @@ Dear [Name],
 Best regards,`;
         };
 
+        // Get user-selected packages from storage (defaults to ['generic'] if none selected)
+        const userPackages = await getUserPackages();
+
         // Get matched type from userPackages based on classification.type
         const matchedPackage = userPackages.find(p => p.name === classification.type) || userPackages.find(p => p.name === 'generic');
         const roleDescription = matchedPackage.roleDescription;
@@ -2556,11 +2601,27 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
     }
 };
 
-const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null) => {
+const showDraftsOverlay = async (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null) => {
     // Remove existing overlay
     document.querySelector('.responseable-overlay')?.remove();
 
     const adapter = customAdapter || platformAdapters[platform];
+
+    // Get selected packages for display
+    const selectedPackages = await getUserPackages();
+    const selectedPackageNames = selectedPackages.map(p => p.name).join(', ');
+
+    // Get matched type information from classification
+    let matchedTypeInfo = null;
+    if (classification && classification.type) {
+        const matchedPackage = ALL_PACKAGES.find(p => p.name === classification.type);
+        if (matchedPackage) {
+            matchedTypeInfo = {
+                name: matchedPackage.name,
+                description: matchedPackage.description
+            };
+        }
+    }
     const overlay = document.createElement('div');
     overlay.className = 'responseable-overlay';
     overlay.style.cssText = `
@@ -2755,7 +2816,9 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
 
     overlay.innerHTML = `
     <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> Able to Respond Better</h2>
-    ${classification ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 12px; font-size: 12px;"><strong>Intent:</strong> ${classification.intent || 'general inquiry'}${classification.key_topics && classification.key_topics.length > 0 ? ` | Topics: ${classification.key_topics.join(', ')}` : ''}</p>` : ''}
+    ${selectedPackageNames ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : ''}
+    ${matchedTypeInfo ? `<p style="color:#5f6368; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}
+    ${classification ? `<p style="color:#5f6368; margin-top: ${matchedTypeInfo || selectedPackageNames ? '0' : '-8px'}; margin-bottom: 12px; font-size: 12px;"><strong>Intent:</strong> ${classification.intent || 'general inquiry'}${classification.key_topics && classification.key_topics.length > 0 ? ` | Topics: ${classification.key_topics.join(', ')}` : ''}</p>` : ''}
     ${responseGoals.length > 1 ? `
     <div style="margin-bottom: 16px; border-bottom: 1px solid #dadce0; padding-bottom: 8px;">
       <div style="display: flex; flex-wrap: wrap; gap: 0;">
@@ -2888,9 +2951,9 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
                         regenerateContext.recipientName,
                         regenerateContext.recipientCompany,
                         adapter,
-                        (newDraftsText) => {
+                        async (newDraftsText) => {
                             // Re-render the drafts with new goal
-                            showDraftsOverlay(newDraftsText, regenerateContext.context, platform, adapter, { ...classification, _currentGoal: goal, _currentVariantSet: goalVariantSet, _currentTone: goalTone }, regenerateContext);
+                            await showDraftsOverlay(newDraftsText, regenerateContext.context, platform, adapter, { ...classification, _currentGoal: goal, _currentVariantSet: goalVariantSet, _currentTone: goalTone }, regenerateContext);
                         },
                         regenerateContext  // Pass regenerateContext
                     );
@@ -2984,9 +3047,9 @@ const showDraftsOverlay = (draftsText, context, platform, customAdapter = null, 
                         regenerateContext.recipientName,
                         regenerateContext.recipientCompany,
                         adapter,
-                        (newDraftsText) => {
+                        async (newDraftsText) => {
                             // Re-render the drafts with new tone
-                            showDraftsOverlay(newDraftsText, regenerateContext.context, platform, adapter, updatedClassification, regenerateContext);
+                            await showDraftsOverlay(newDraftsText, regenerateContext.context, platform, adapter, updatedClassification, regenerateContext);
                         },
                         regenerateContext  // Pass regenerateContext
                     );
@@ -3088,7 +3151,9 @@ const createCommentButtonHandler = (editor) => {
             };
 
             // Show drafts overlay with comment adapter
-            showDraftsOverlay(draftsText, postText, 'linkedin', commentAdapter);
+            (async () => {
+                await showDraftsOverlay(draftsText, postText, 'linkedin', commentAdapter);
+            })();
 
             // Restore button after overlay closes (handled by overlay removal)
             const restoreButton = () => {
