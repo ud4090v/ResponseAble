@@ -1401,13 +1401,25 @@ const platformAdapters = {
                     body = clonedEmail.innerText?.trim() || clonedEmail.textContent?.trim() || '';
 
                     // Get sender info from the message container
-                    const container = emailBeingRepliedTo.closest('[role="listitem"]') || emailBeingRepliedTo.parentElement;
+                    // CRITICAL FIX: Gmail uses div.adn.ads[data-message-id] as the message container
+                    // The sender info (span.gD[email][name]) is inside this container
+                    const container = emailBeingRepliedTo.closest('div.adn.ads[data-message-id]') || 
+                                     emailBeingRepliedTo.closest('[data-message-id]') ||
+                                     emailBeingRepliedTo.closest('[role="listitem"]') || 
+                                     emailBeingRepliedTo.parentElement;
                     if (container) {
-                        // Look for sender name/email in the header
-                        const nameSpan = container.querySelector('span[name]');
-                        const emailSpan = container.querySelector('span[email]');
-                        if (nameSpan) senderName = nameSpan.getAttribute('name') || '';
-                        if (emailSpan) senderEmail = emailSpan.getAttribute('email') || '';
+                        // Look for sender name/email in the header using Gmail's span.gD selector
+                        const senderSpan = container.querySelector('span.gD[email][name]');
+                        if (senderSpan) {
+                            senderName = senderSpan.getAttribute('name') || '';
+                            senderEmail = senderSpan.getAttribute('email') || '';
+                        } else {
+                            // Fallback to generic span[name]/span[email]
+                            const nameSpan = container.querySelector('span[name]');
+                            const emailSpan = container.querySelector('span[email]');
+                            if (nameSpan) senderName = nameSpan.getAttribute('name') || '';
+                            if (emailSpan) senderEmail = emailSpan.getAttribute('email') || '';
+                        }
                     }
                 }
             }
@@ -1467,15 +1479,27 @@ const platformAdapters = {
             }
             
             // STRATEGY 4: Last resort - use getEmailBeingRepliedTo for sender info
+            // CRITICAL FIX: Use correct Gmail container selector (div.adn.ads[data-message-id])
             if (!senderName) {
                 const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
                 if (emailBeingRepliedTo) {
-                    const container = emailBeingRepliedTo.closest('[role="listitem"]') || emailBeingRepliedTo.parentElement;
+                    const container = emailBeingRepliedTo.closest('div.adn.ads[data-message-id]') || 
+                                     emailBeingRepliedTo.closest('[data-message-id]') ||
+                                     emailBeingRepliedTo.closest('[role="listitem"]') || 
+                                     emailBeingRepliedTo.parentElement;
                     if (container) {
-                        const nameSpan = container.querySelector('span[name]');
-                        const emailSpan = container.querySelector('span[email]');
-                        if (nameSpan) senderName = nameSpan.getAttribute('name') || '';
-                        if (emailSpan) senderEmail = emailSpan.getAttribute('email') || '';
+                        // Look for sender using Gmail's span.gD selector first
+                        const senderSpan = container.querySelector('span.gD[email][name]');
+                        if (senderSpan) {
+                            senderName = senderSpan.getAttribute('name') || '';
+                            senderEmail = senderSpan.getAttribute('email') || '';
+                        } else {
+                            // Fallback to generic span[name]/span[email]
+                            const nameSpan = container.querySelector('span[name]');
+                            const emailSpan = container.querySelector('span[email]');
+                            if (nameSpan) senderName = nameSpan.getAttribute('name') || '';
+                            if (emailSpan) senderEmail = emailSpan.getAttribute('email') || '';
+                        }
                     }
                 }
             }
