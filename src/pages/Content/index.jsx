@@ -540,6 +540,32 @@ Rules:
         // Use senderName if provided (extracted from the email being replied to), otherwise fall back to richContext
         const actualSenderName = senderName || richContext.recipientName || '';
 
+        // Create a TRUNCATED thread context summary for tone/clarification purposes
+        // This is much shorter than the full thread to avoid overwhelming the FOCUS_EMAIL's intent
+        // Used for: clarifying ambiguous references, determining conversation tone/dynamic
+        // NOT used for: determining intent or response goals (those come from FOCUS_EMAIL only)
+        const createThreadContextSummary = (fullThread) => {
+            if (!fullThread || fullThread.length < 50) return '';
+            
+            // Take only the last 2-3 messages, each truncated to ~300 chars
+            const messages = fullThread.split(/\n---\n|\n\n---\n\n/);
+            const recentMessages = messages.slice(-3);
+            const truncatedMessages = recentMessages.map(msg => {
+                const trimmed = msg.trim();
+                if (trimmed.length > 300) {
+                    return trimmed.substring(0, 300) + '...';
+                }
+                return trimmed;
+            }).filter(msg => msg.length > 20);
+            
+            if (truncatedMessages.length === 0) return '';
+            
+            // Create a brief summary format
+            return `[Brief context from ${truncatedMessages.length} recent message(s) - for tone/clarification only]\n${truncatedMessages.join('\n---\n')}`;
+        };
+        
+        const threadContextSummary = createThreadContextSummary(previousThreadHistory);
+
         // First API call: Determine type
         // CRITICAL: Do NOT include thread history here - LLMs are influenced by text even when told to "ignore" it
         // The user's test showed that the same email text produces correct classification when standalone,
@@ -594,33 +620,35 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
         const typeIntent = matchedType.intent;
 
         // Step 2: Full classification using the matched type
-        // NOTE: Thread history is intentionally NOT included - LLMs are influenced by it even when told to "ignore"
+        // Thread context summary is included for tone/clarification, but intent/goals come from FOCUS_EMAIL only
         const classificationPrompt = `You are an expert email classifier. Analyze the ${platform === 'linkedin' ? 'message' : 'email'} and return ONLY a JSON object with:
 {
   "type": "${packageName}",
-  "intent": Determine the sender's primary intent from the recipient's perspective. Base this on the matched type's intent context ("${typeIntent}") and the email content. The intent should be specific, natural, and contextual, reflecting what the sender is trying to achieve.
-  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. Base these on what the sender is specifically asking, requesting, or doing. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X", NOT "Express interest". The goals must directly address what the sender is asking for.
+  "intent": Determine the sender's primary intent from the recipient's perspective. Base this ONLY on the FOCUS_EMAIL content. The intent should be specific, natural, and contextual, reflecting what the sender is trying to achieve in THIS specific email.
+  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. Base these ONLY on what the sender is specifically asking, requesting, or doing in the FOCUS_EMAIL. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X", NOT "Express interest". The goals must directly address what the sender is asking for in THIS email.
   "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
-  "tone_needed": Determine the single most appropriate tone for the reply based on the email's context and type.
-  "tone_sets": Object with keys matching response_goals, each containing array of suggested ranked tone strings appropriate for that goal.
+  "tone_needed": Determine the single most appropriate tone for the reply. You may use the THREAD_CONTEXT to understand the overall conversation dynamic and relationship.
+  "tone_sets": Object with keys matching response_goals, each containing array of suggested ranked tone strings. You may use the THREAD_CONTEXT to inform appropriate tones for the relationship.
   "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
-  "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
-  "recipient_company": string or null (the company of the person who SENT this email),
-  "key_topics": array of strings (max 5, based on the email content)
+  "recipient_name": string (the name of the person who SENT the FOCUS_EMAIL${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
+  "recipient_company": string or null (the company of the person who SENT the FOCUS_EMAIL),
+  "key_topics": array of strings (max 5, based on the FOCUS_EMAIL content)
 }
 
 CRITICAL INSTRUCTIONS:
 1. The type has been determined as "${packageName}". Use this type value.
-2. Base "intent" on what the sender is specifically doing in THIS email. If they're asking a question, the intent is about that question.
-3. Base "response_goals" on what the sender is specifically asking or requesting. Look at the actual questions, requests, or statements. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X" or similar.
-4. ${actualSenderName ? `The sender's name is "${actualSenderName}" - use this for recipient_name.` : 'Extract the sender\'s name from the email content.'}
-5. The type should influence everything - make intent, goals, tones, and variants type-appropriate.
-6. Be context-specific and realistic. Base everything on the email's actual content.
+2. FOCUS_EMAIL is the PRIMARY input. Base "intent" and "response_goals" ONLY on the FOCUS_EMAIL content.
+3. THREAD_CONTEXT (if provided) is for SUPPLEMENTARY purposes only:
+   - Use it to clarify ambiguous references in the FOCUS_EMAIL (e.g., "the offer email" refers to what?)
+   - Use it to understand the overall tone and relationship dynamic
+   - Use it to identify names, companies, or context mentioned in the FOCUS_EMAIL
+   - DO NOT let it override the FOCUS_EMAIL's intent or goals
+4. If the FOCUS_EMAIL asks a question (e.g., "Did you receive X?"), the intent and goals must be about answering that question, NOT about the broader thread topic.
+5. ${actualSenderName ? `The sender's name is "${actualSenderName}" - use this for recipient_name.` : 'Extract the sender\'s name from the FOCUS_EMAIL content.'}
+6. Be context-specific and realistic. The response should directly address what the FOCUS_EMAIL is asking for.
 7. Return ONLY valid JSON, no other text.`;
 
-        // CRITICAL: Do NOT include thread history here - LLMs are influenced by text even when told to "ignore" it
-        // The user's test showed that the same email text produces correct classification when standalone,
-        // but wrong classification when thread history is included (even with "IGNORE" instructions)
+        // Include truncated thread context for tone/clarification, but keep it small to avoid overwhelming FOCUS_EMAIL
         const messages = [
             {
                 role: 'system',
@@ -628,10 +656,10 @@ CRITICAL INSTRUCTIONS:
             },
             {
                 role: 'user',
-                content: `=== EMAIL BEING REPLIED TO ===
+                content: `=== FOCUS_EMAIL (the specific email being replied to) ===
 ${emailBeingRepliedTo}
 
-${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
+${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}${threadContextSummary ? `\n\n=== THREAD_CONTEXT (for tone/clarification only - DO NOT use for intent/goals) ===\n${threadContextSummary}` : ''}`
             }
         ];
 
