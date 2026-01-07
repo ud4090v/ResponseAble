@@ -541,6 +541,9 @@ Rules:
         const actualSenderName = senderName || richContext.recipientName || '';
 
         // First API call: Determine type
+        // CRITICAL: Do NOT include thread history here - LLMs are influenced by text even when told to "ignore" it
+        // The user's test showed that the same email text produces correct classification when standalone,
+        // but wrong classification when thread history is included (even with "IGNORE" instructions)
         const typeDeterminationMessages = [
             {
                 role: 'system',
@@ -548,15 +551,10 @@ Rules:
             },
             {
                 role: 'user',
-                content: `=== EMAIL BEING REPLIED TO (USE THIS FOR TYPE DETERMINATION - IGNORE THREAD HISTORY BELOW) ===
+                content: `=== EMAIL BEING REPLIED TO ===
 ${emailBeingRepliedTo}
 
-${previousThreadHistory ? `=== PREVIOUS THREAD HISTORY (IGNORE FOR TYPE DETERMINATION - BACKGROUND ONLY) ===
-${previousThreadHistory}
-
-REMINDER: Determine the type based on the "EMAIL BEING REPLIED TO" section above. The thread history is only for background context, NOT for determining the type.
-
-` : ''}${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
+${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
             }
         ];
 
@@ -596,30 +594,33 @@ REMINDER: Determine the type based on the "EMAIL BEING REPLIED TO" section above
         const typeIntent = matchedType.intent;
 
         // Step 2: Full classification using the matched type
-        const classificationPrompt = `You are an expert email classifier. Analyze the ${platform === 'linkedin' ? 'message' : 'email'} context and return ONLY a JSON object with:
+        // NOTE: Thread history is intentionally NOT included - LLMs are influenced by it even when told to "ignore"
+        const classificationPrompt = `You are an expert email classifier. Analyze the ${platform === 'linkedin' ? 'message' : 'email'} and return ONLY a JSON object with:
 {
   "type": "${packageName}",
-  "intent": Determine the sender's primary intent from the recipient's perspective. CRITICAL: Base the intent DIRECTLY on the matched type's intent context and the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below). The matched type intent context is: "${typeIntent}". Use this as guidance to determine the specific intent for this email. The intent should be specific, natural, and contextual, reflecting what the sender is trying to achieve in THAT SPECIFIC EMAIL. PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO - use thread history only for background understanding. IGNORE thread history when determining intent.
-  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. CRITICAL: Base these DIRECTLY on the detected type, the detected intent, and the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below). The goals must be type-appropriate and reflect realistic response options for that specific type of email. Consider what responses make sense for this type of communication. Be nuanced, realistic, and contextually relevant. PRIORITIZE responding to the SPECIFIC EMAIL BEING REPLIED TO - ignore thread history when determining goals.
-  "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label. Keep titles concise and action-oriented. The title should capture the essence of the goal.
-  "tone_needed": Determine the single most appropriate tone for the reply. CRITICAL: Base this DIRECTLY on the detected type, the detected intent, and the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below). The tone must be type-appropriate. Consider what tone is most suitable for responding to this type of email. Be nuanced and realistic. PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO's tone and context - ignore thread history when determining tone.
-  "tone_sets": Object with keys matching response_goals, each containing array of suggested ranked tone strings. CRITICAL: Base these DIRECTLY on the detected type, the specific response_goal, and the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below). Each tone must be type-appropriate and goal-appropriate. Consider what tones make sense for this type of email and this specific goal. Rank them by relevance. IGNORE thread history when determining tones.
-  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance. CRITICAL: Base these DIRECTLY on the detected type, the specific response_goal, and the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below). Each variant label must be type-appropriate and goal-appropriate. Consider what response variants make sense for this type of email and this specific goal. Make them descriptive and action-oriented. IGNORE thread history when determining variants.
-  "recipient_name": string (the name of the person who SENT the email being replied to - extract this from the "EMAIL BEING REPLIED TO" section, NOT from thread history),
-  "recipient_company": string or null (the company of the person who SENT the email being replied to),
-  "key_topics": array of strings (max 5, based on the SPECIFIC EMAIL BEING REPLIED TO, not the thread)
+  "intent": Determine the sender's primary intent from the recipient's perspective. Base this on the matched type's intent context ("${typeIntent}") and the email content. The intent should be specific, natural, and contextual, reflecting what the sender is trying to achieve.
+  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. Base these on what the sender is specifically asking, requesting, or doing. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X", NOT "Express interest". The goals must directly address what the sender is asking for.
+  "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
+  "tone_needed": Determine the single most appropriate tone for the reply based on the email's context and type.
+  "tone_sets": Object with keys matching response_goals, each containing array of suggested ranked tone strings appropriate for that goal.
+  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
+  "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
+  "recipient_company": string or null (the company of the person who SENT this email),
+  "key_topics": array of strings (max 5, based on the email content)
 }
 
 CRITICAL INSTRUCTIONS:
-1. The type has been determined as "${packageName}" based on package matching. Use this type value.
-2. Base the "intent" DIRECTLY on the matched type's intent context ("${typeIntent}") AND the SPECIFIC EMAIL BEING REPLIED TO (shown in the "EMAIL BEING REPLIED TO" section below) to determine the specific intent for this email. PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO - use thread history only for background understanding. IGNORE thread history when determining intent.
-3. Base "response_goals" DIRECTLY on what the sender is specifically asking, requesting, or doing in the SPECIFIC EMAIL BEING REPLIED TO. Look at the actual questions, requests, or statements in that email. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X" or similar, NOT "Express interest" (which would be for the initial offer). The goals must directly address what the sender is asking for in THAT SPECIFIC EMAIL. IGNORE thread history completely when determining goals.
-4. Base "recipient_name" on the person who SENT the SPECIFIC EMAIL BEING REPLIED TO. Extract the sender's name from the "EMAIL BEING REPLIED TO" section. DO NOT use names from thread history. ${actualSenderName ? `The sender's name should be "${actualSenderName}" - use this value for recipient_name.` : 'Extract the sender\'s name from the email header or content.'}
-5. Base ALL other fields (tone_needed, tone_sets, variant_sets) DIRECTLY on the detected type, the detected intent, and the SPECIFIC EMAIL BEING REPLIED TO. PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO's content and intent. IGNORE thread history when determining these fields.
-6. The type should STRONGLY influence everything - make intent type-appropriate, goals type-appropriate, tones type-appropriate, and variants type-appropriate.
-7. Be highly context-specific, nuanced, and realistic. Base everything on the SPECIFIC EMAIL BEING REPLIED TO's content, relationship, and situation. The thread history is provided ONLY for background context - DO NOT use it to determine goals, tones, variants, or recipient_name.
-8. Return ONLY valid JSON, no other text.`;
+1. The type has been determined as "${packageName}". Use this type value.
+2. Base "intent" on what the sender is specifically doing in THIS email. If they're asking a question, the intent is about that question.
+3. Base "response_goals" on what the sender is specifically asking or requesting. Look at the actual questions, requests, or statements. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X" or similar.
+4. ${actualSenderName ? `The sender's name is "${actualSenderName}" - use this for recipient_name.` : 'Extract the sender\'s name from the email content.'}
+5. The type should influence everything - make intent, goals, tones, and variants type-appropriate.
+6. Be context-specific and realistic. Base everything on the email's actual content.
+7. Return ONLY valid JSON, no other text.`;
 
+        // CRITICAL: Do NOT include thread history here - LLMs are influenced by text even when told to "ignore" it
+        // The user's test showed that the same email text produces correct classification when standalone,
+        // but wrong classification when thread history is included (even with "IGNORE" instructions)
         const messages = [
             {
                 role: 'system',
@@ -627,20 +628,10 @@ CRITICAL INSTRUCTIONS:
             },
             {
                 role: 'user',
-                content: `=== EMAIL BEING REPLIED TO (USE THIS FOR CLASSIFICATION - IGNORE THREAD HISTORY BELOW) ===
+                content: `=== EMAIL BEING REPLIED TO ===
 ${emailBeingRepliedTo}
 
-${previousThreadHistory ? `=== PREVIOUS THREAD HISTORY (IGNORE FOR CLASSIFICATION - BACKGROUND ONLY) ===
-${previousThreadHistory}
-
-REMINDER: Classify based on the SPECIFIC EMAIL BEING REPLIED TO above. 
-- Determine intent based on what the sender is doing in THAT SPECIFIC EMAIL.
-- Determine goals based on what the sender is SPECIFICALLY asking or requesting in THAT SPECIFIC EMAIL (e.g., if they ask "Did you receive X?", the goal should be about confirming receipt, NOT expressing general interest).
-- Extract recipient_name from the sender of THAT SPECIFIC EMAIL (${actualSenderName ? `should be "${actualSenderName}"` : 'extract from email header'}).
-- The thread history is only for background context, NOT for determining the classification. 
-- IGNORE the thread history completely when determining goals, recipient_name, and other fields.
-
-` : ''}${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
+${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
             }
         ];
 
