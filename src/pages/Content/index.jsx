@@ -224,48 +224,168 @@ const detectPlatform = () => {
 };
 
 // Master list of all available packages for email type classification
+// Master list of all available packages for email type classification
+// Each package includes:
+// - allowedGoals: Type-specific response goals the AI must choose from
+// - allowedVariants: Type-specific variant labels for different response styles
+// This ensures content is truly differentiated by type, not just labeled differently
 const ALL_PACKAGES = [
     {
         "name": "sales",
         "description": "emails about deals, follow-ups, objections, meetings, and closing business",
         "intent": "The sender is selling a product or service to the recipient. Consider their approach: cold outreach (initial contact), follow-up (nudge after no response), offering discount (price incentive), value proposition (highlight benefits), or closing (meeting/demo request).",
         "roleDescription": "a world-class B2B sales email writer",
-        "contextSpecific": "Respond as a potential customer evaluating the offer. Consider: pricing, value proposition, fit with your needs, and next steps. Use variants that match your interest level and decision-making stage."
+        "contextSpecific": "Respond as a potential customer evaluating the offer. Consider: pricing, value proposition, fit with your needs, and next steps. Use variants that match your interest level and decision-making stage.",
+        "allowedGoals": [
+            "Express interest and request more details",
+            "Request pricing or proposal",
+            "Schedule a demo or meeting",
+            "Ask about specific features or capabilities",
+            "Request case studies or references",
+            "Politely decline the offer",
+            "Defer decision to later",
+            "Request to be removed from list"
+        ],
+        "allowedVariants": [
+            "Interested buyer",
+            "Cautious evaluator",
+            "Budget-conscious",
+            "Time-pressed decision maker",
+            "Needs more info",
+            "Polite pass",
+            "Not now, maybe later"
+        ]
     },
     {
         "name": "recruitment",
         "description": "emails about hiring, candidates, sourcing talent, interviews, and job offers",
         "intent": "The sender is a recruiter offering a job position or opportunity to the recipient. Consider what they're offering: specific role details, interview invitation, salary range, company culture fit, or next steps in hiring process.",
         "roleDescription": "a professional candidate responding to a recruiter's job offer",
-        "contextSpecific": "The sender (recruiter) is OFFERING a job position to YOU (the recipient/candidate). Respond as the candidate - express interest, ask questions about the role/company/compensation, or politely decline. Consider: role fit, career goals, compensation, company culture, and work-life balance. Do NOT respond as if you are offering them a job."
+        "contextSpecific": "The sender (recruiter) is OFFERING a job position to YOU (the recipient/candidate). Respond as the candidate - express interest, ask questions about the role/company/compensation, or politely decline. Consider: role fit, career goals, compensation, company culture, and work-life balance. Do NOT respond as if you are offering them a job.",
+        "allowedGoals": [
+            "Express strong interest in the position",
+            "Request more details about the role",
+            "Ask about compensation and benefits",
+            "Inquire about remote/hybrid options",
+            "Share availability for interview",
+            "Provide resume or portfolio",
+            "Ask about company culture and team",
+            "Politely decline the opportunity",
+            "Confirm receipt of documents or next steps"
+        ],
+        "allowedVariants": [
+            "Enthusiastic candidate",
+            "Experienced professional",
+            "Curious about details",
+            "Compensation-focused",
+            "Culture-fit seeker",
+            "Polite decliner",
+            "Currently exploring options"
+        ]
     },
     {
         "name": "jobseeker",
         "description": "emails about job applications, interviews, follow-ups as a candidate, and career opportunities",
         "intent": "The sender is a job seeker applying to or following up with the recipient. Consider their intent: expressing interest in a role, attaching resume, requesting interview, thanking after meeting, or seeking referrals.",
         "roleDescription": "a hiring manager or recruiter responding to a job application",
-        "contextSpecific": "The sender is applying for a position. Respond as the recipient (hiring manager/recruiter). Consider: candidate qualifications, fit with role requirements, next steps in hiring process, and providing constructive feedback if declining."
+        "contextSpecific": "The sender is applying for a position. Respond as the recipient (hiring manager/recruiter). Consider: candidate qualifications, fit with role requirements, next steps in hiring process, and providing constructive feedback if declining.",
+        "allowedGoals": [
+            "Acknowledge application receipt",
+            "Request additional materials",
+            "Schedule an interview",
+            "Provide status update on application",
+            "Request references or portfolio",
+            "Move candidate to next round",
+            "Politely decline application",
+            "Keep candidate in pipeline for future"
+        ],
+        "allowedVariants": [
+            "Encouraging recruiter",
+            "Efficient process manager",
+            "Detailed feedback provider",
+            "Warm but professional",
+            "Direct and clear",
+            "Regretful decliner",
+            "Future opportunity suggester"
+        ]
     },
     {
         "name": "support",
         "description": "emails about customer issues, complaints, troubleshooting, and resolutions",
         "intent": "The sender is seeking help or reporting an issue to the recipient. Consider the problem: technical bug, billing inquiry, feature request, or service complaint, and urgency level.",
         "roleDescription": "an empathetic customer support specialist",
-        "contextSpecific": "Address the customer's concern professionally and helpfully. Consider: urgency, impact, resolution options, escalation needs, and customer satisfaction. Provide clear next steps and timelines."
+        "contextSpecific": "Address the customer's concern professionally and helpfully. Consider: urgency, impact, resolution options, escalation needs, and customer satisfaction. Provide clear next steps and timelines.",
+        "allowedGoals": [
+            "Acknowledge the issue and apologize",
+            "Provide immediate solution or workaround",
+            "Request more details to diagnose",
+            "Escalate to specialist team",
+            "Offer compensation or credit",
+            "Explain resolution timeline",
+            "Follow up on previous issue",
+            "Close resolved ticket"
+        ],
+        "allowedVariants": [
+            "Empathetic helper",
+            "Technical problem solver",
+            "Apologetic and proactive",
+            "Clear step-by-step guide",
+            "Escalation specialist",
+            "Compensation offerer",
+            "Follow-up checker"
+        ]
     },
     {
         "name": "networking",
         "description": "emails about professional connections, introductions, referrals, and collaborations",
         "intent": "The sender is building or maintaining a professional relationship with the recipient. Consider the goal: warm introduction, referral request, collaboration proposal, or staying in touch after event.",
         "roleDescription": "a professional building genuine connections",
-        "contextSpecific": "Build a meaningful professional relationship. Consider: mutual value, relationship building, reciprocity, and long-term connection. Keep it professional, warm, and relationship-focused."
+        "contextSpecific": "Build a meaningful professional relationship. Consider: mutual value, relationship building, reciprocity, and long-term connection. Keep it professional, warm, and relationship-focused.",
+        "allowedGoals": [
+            "Accept connection request warmly",
+            "Propose a coffee chat or call",
+            "Offer to make an introduction",
+            "Request a referral or introduction",
+            "Follow up after meeting or event",
+            "Share relevant resource or opportunity",
+            "Explore collaboration possibilities",
+            "Politely decline request"
+        ],
+        "allowedVariants": [
+            "Warm connector",
+            "Mutual value seeker",
+            "Helpful introducer",
+            "Curious networker",
+            "Event follow-upper",
+            "Resource sharer",
+            "Polite boundary setter"
+        ]
     },
     {
         "name": "generic",
         "description": "general professional emails not fitting specific categories",
         "intent": "The sender has a neutral professional intent toward the recipient. Consider basic goals like information sharing, scheduling, or simple acknowledgments without strong sales/hiring/support elements.",
         "roleDescription": "a professional email reply writer",
-        "contextSpecific": "Carefully analyze the source email to understand the context, relationship, and intent. Respond appropriately from the recipient's perspective, considering the specific situation and relationship dynamics."
+        "contextSpecific": "Carefully analyze the source email to understand the context, relationship, and intent. Respond appropriately from the recipient's perspective, considering the specific situation and relationship dynamics.",
+        "allowedGoals": [
+            "Acknowledge and confirm receipt",
+            "Answer the question directly",
+            "Provide requested information",
+            "Agree to the request",
+            "Propose alternative or schedule",
+            "Ask for clarification",
+            "Politely decline",
+            "Forward to appropriate person"
+        ],
+        "allowedVariants": [
+            "Friendly and helpful",
+            "Professional and concise",
+            "Warm acknowledgment",
+            "Direct answer",
+            "Thoughtful response",
+            "Brief confirmation",
+            "Polite redirect"
+        ]
     }
 ];
 
@@ -626,32 +746,48 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
         const matchedType = typeMatchResult.matched_type || userPackages.find(p => p.name === 'generic');
         const packageName = matchedType.name;
         const typeIntent = matchedType.intent;
+        
+        // Get the full package definition to access allowedGoals and allowedVariants
+        const fullPackage = ALL_PACKAGES.find(p => p.name === packageName) || ALL_PACKAGES.find(p => p.name === 'generic');
+        const allowedGoals = fullPackage.allowedGoals || [];
+        const allowedVariants = fullPackage.allowedVariants || [];
 
         // ============================================================================
         // STEP 2: INTENT/GOALS DETERMINATION - FOCUS_EMAIL ONLY (COMPLETELY ISOLATED)
         // ============================================================================
         // CRITICAL: This call sees ONLY the FOCUS_EMAIL - NO thread history at all
         // This ensures intent and goals are determined solely from the specific email
-        // BUT: We now include type-specific context to guide appropriate intent and variant generation
-        const intentGoalsPrompt = `You are an expert email classifier. Analyze ONLY the provided email and return a JSON object with:
+        // TYPE-CONSTRAINED: Goals and variants MUST be selected from the type-specific menus
+        const intentGoalsPrompt = `You are ${fullPackage.roleDescription}. Analyze ONLY the provided email and return a JSON object.
+
+EMAIL TYPE: ${packageName.toUpperCase()}
+Type Description: ${matchedType.description}
+Your Role: ${fullPackage.roleDescription}
+Context: ${fullPackage.contextSpecific}
+${typeIntent ? `Intent Guidance: ${typeIntent}` : ''}
+
+ALLOWED GOALS FOR ${packageName.toUpperCase()} TYPE (you MUST choose from these):
+${allowedGoals.map((g, i) => `${i + 1}. ${g}`).join('\n')}
+
+ALLOWED VARIANTS FOR ${packageName.toUpperCase()} TYPE (you MUST choose from these):
+${allowedVariants.map((v, i) => `${i + 1}. ${v}`).join('\n')}
+
+Return a JSON object with:
 {
   "intent": Determine the sender's primary intent from the recipient's perspective. What is the sender specifically asking, requesting, or doing in THIS email? Be specific and contextual.
-  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. Base these ONLY on what the sender is specifically asking or doing. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X", NOT "Express interest in opportunity". The goals must directly address what the sender is asking for.
+  "response_goals": Array of up to 5 goals selected FROM THE ALLOWED GOALS LIST ABOVE, ranked by suitability for this specific email. You may slightly adapt the wording to fit the email context, but the core goal must match one from the allowed list.
   "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
-  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
+  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} variants selected FROM THE ALLOWED VARIANTS LIST ABOVE. You may slightly adapt wording but must use variants from the allowed list.
   "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
   "recipient_company": string or null (the company of the person who SENT this email),
   "key_topics": array of strings (max 5, based on the email content)
 }
 
-EMAIL TYPE CONTEXT:
-- Matched Type: ${packageName}
-- Type Description: ${matchedType.description}
-${typeIntent ? `- Type-Specific Intent Guidance: ${typeIntent}` : ''}
-
 CRITICAL INSTRUCTIONS:
 - Focus ONLY on what THIS specific email is asking or doing. If it asks a question like "Did you receive X?", the intent must be about that question and goals must be about answering it.
-${packageName === 'generic' ? '- IMPORTANT: This is a GENERIC email type. Keep the intent, goals, and variants truly generic and neutral. Do NOT assume business relationships, job contexts, or specific professional scenarios unless explicitly mentioned in the email. Generic means simple, straightforward, and context-neutral.' : ''}
+- response_goals MUST be selected from the ALLOWED GOALS list for ${packageName} type. Do NOT invent new goals.
+- variant_sets MUST use variants from the ALLOWED VARIANTS list for ${packageName} type. Do NOT invent new variants.
+${packageName === 'generic' ? '- IMPORTANT: This is a GENERIC email type. Keep everything simple, neutral, and context-free. Use only the generic goals and variants provided. Do NOT assume business relationships, job contexts, or specific professional scenarios.' : `- IMPORTANT: This is a ${packageName.toUpperCase()} email. Use the specialized ${packageName} goals and variants to provide domain-specific response options.`}
 Return ONLY valid JSON, no other text.`;
 
         const intentGoalsMessages = [
@@ -686,12 +822,17 @@ ${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipient
             intentGoalsResult = JSON.parse(intentGoalsContent);
         } catch (intentError) {
             console.error('Intent/Goals determination error:', intentError);
-            // Fallback with generic values
+            // Fallback with type-specific values from the matched package
+            const fallbackGoals = allowedGoals.slice(0, 3);
+            const fallbackVariants = allowedVariants.slice(0, numVariants);
             intentGoalsResult = {
                 intent: 'General inquiry or follow-up',
-                response_goals: ['Respond appropriately', 'Address the question', 'Provide information'],
+                response_goals: fallbackGoals.length > 0 ? fallbackGoals : ['Respond appropriately', 'Address the question', 'Provide information'],
                 goal_titles: {},
-                variant_sets: {},
+                variant_sets: fallbackGoals.reduce((acc, goal) => {
+                    acc[goal] = fallbackVariants;
+                    return acc;
+                }, {}),
                 recipient_name: actualSenderName || 'there',
                 recipient_company: null,
                 key_topics: []
@@ -2483,8 +2624,13 @@ Best regards,`;
 Write in a way that sounds like YOU wrote it, matching your typical communication style.`;
         }
 
+        // Get type-specific context for LinkedIn (same as Gmail)
+        const linkedinTypeContext = classification.type && classification.type !== 'generic'
+            ? `\n\nEMAIL TYPE: ${classification.type.toUpperCase()}\nContext: ${contextSpecific}${intentContext}`
+            : '';
+
         const systemPrompt = platform === 'linkedin'
-            ? `You are a professional LinkedIn message writer. Generate exactly ${variantSet.length} complete, personalized reply options based on the source message provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"} at ${classification.recipient_company || "their company"}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""}${linkedinStyleInstructions}
+            ? `You are ${roleDescription} on LinkedIn. Generate exactly ${variantSet.length} complete, personalized reply options based on the source message provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"} at ${classification.recipient_company || "their company"}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""}${linkedinTypeContext}${linkedinStyleInstructions}
 
 CRITICAL CONTEXT HANDLING:
 - You will receive TWO sections: "MESSAGE BEING REPLIED TO" and optionally "PREVIOUS CONVERSATION HISTORY"
