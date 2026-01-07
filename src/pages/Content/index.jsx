@@ -612,6 +612,21 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
 CRITICAL: Focus ONLY on what THIS specific email is asking or doing. If it asks a question like "Did you receive X?", the intent must be about that question and goals must be about answering it.
 Return ONLY valid JSON, no other text.`;
 
+        // DEBUG: Log what's being sent to the Intent/Goals API
+        // Enable debug mode by setting localStorage.setItem('responseable_debug', 'true') in console
+        const debugMode = typeof localStorage !== 'undefined' && localStorage.getItem('responseable_debug') === 'true';
+        if (debugMode) {
+            console.log('[ResponseAble DEBUG] Step 2 - Intent/Goals Input:');
+            console.log('[ResponseAble DEBUG] emailBeingRepliedTo length:', emailBeingRepliedTo.length);
+            console.log('[ResponseAble DEBUG] emailBeingRepliedTo (first 500 chars):', emailBeingRepliedTo.substring(0, 500));
+            console.log('[ResponseAble DEBUG] Contains "JOB DETAILS":', emailBeingRepliedTo.includes('JOB DETAILS'));
+            console.log('[ResponseAble DEBUG] Contains "On ... wrote:":', /On .+ wrote:/.test(emailBeingRepliedTo));
+            console.log('[ResponseAble DEBUG] actualSenderName:', actualSenderName);
+        }
+
+        // CRITICAL: Do NOT include subject line here - it can bias the AI
+        // The subject "CGI Handoff Email TJ Following Up – Sr. SAP ABAP/Fiori Developer" would
+        // cause the AI to think this is about the job offer, not Rusty's specific question
         const intentGoalsMessages = [
             {
                 role: 'system',
@@ -621,9 +636,13 @@ Return ONLY valid JSON, no other text.`;
                 role: 'user',
                 content: `${emailBeingRepliedTo}
 
-${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
+${actualSenderName ? `Sender: ${actualSenderName}` : ''}`
             }
         ];
+
+        if (debugMode) {
+            console.log('[ResponseAble DEBUG] Step 2 - Full user message:', intentGoalsMessages[1].content);
+        }
 
         let intentGoalsResult;
         try {
@@ -1491,17 +1510,47 @@ const platformAdapters = {
             const ccRecipients = ccInput ? ccInput.value : '';
 
             // Clean up the body - remove common noise and strip any remaining nested quote markers
+            // CRITICAL: Gmail often includes the entire thread as plain text within a single quote block
+            // We need to extract ONLY the first message segment (the actual email being replied to)
             if (body) {
+                // First, remove any leading attribution line
+                body = body.replace(/^On .+ wrote:\s*/i, '');
+                
+                // CRITICAL: Find and remove everything after common thread boundary markers
+                // These markers indicate where the replied-to email ends and older thread content begins
+                const threadBoundaryPatterns = [
+                    /\n\s*On .+? wrote:\s*\n/i,           // "On [date], [name] wrote:" - most common
+                    /\n\s*-{3,}\s*Original Message\s*-{3,}/i,  // "--- Original Message ---"
+                    /\n\s*_{3,}\s*\n/,                    // "___" separator line
+                    /\n\s*From:\s+.+\n\s*Sent:\s+/i,     // Outlook-style "From: ... Sent: ..."
+                    /\n\s*From:\s+.+\n\s*Date:\s+/i,     // "From: ... Date: ..."
+                    /\n\s*-{3,}\s*Forwarded message\s*-{3,}/i,  // "--- Forwarded message ---"
+                    /\n\s*Begin forwarded message:/i,    // Apple Mail style
+                    /\n\s*>{2,}\s*On .+ wrote:/i,        // Quoted ">> On ... wrote:"
+                    /\n\s*\*From:\*\s+/i,                // Bold "From:" (some clients)
+                ];
+                
+                // Find the earliest boundary marker and truncate there
+                let earliestBoundary = body.length;
+                for (const pattern of threadBoundaryPatterns) {
+                    const match = body.match(pattern);
+                    if (match && match.index < earliestBoundary) {
+                        earliestBoundary = match.index;
+                    }
+                }
+                
+                // Truncate at the earliest boundary
+                if (earliestBoundary < body.length) {
+                    body = body.substring(0, earliestBoundary);
+                }
+                
+                // Additional cleanup
                 body = body
-                    .replace(/^On .+ wrote:\s*/i, '')  // Remove attribution line if it got included
-                    .replace(/^-+\s*Original Message\s*-+/im, '')  // Remove "Original Message" header
-                    .replace(/^From:.+$/m, '')  // Remove From: line
-                    .replace(/^Sent:.+$/m, '')  // Remove Sent: line
-                    .replace(/^To:.+$/m, '')  // Remove To: line
-                    .replace(/^Subject:.+$/m, '')  // Remove Subject: line
-                    // Also strip any text after common quote markers that might indicate nested content
-                    .replace(/\n-+\s*Forwarded message\s*-+[\s\S]*/im, '')  // Remove forwarded message content
-                    .replace(/\n>+\s*On .+ wrote:[\s\S]*/im, '')  // Remove inline quote markers
+                    .replace(/^-+\s*Original Message\s*-+/im, '')  // Remove "Original Message" header at start
+                    .replace(/^From:.+$/m, '')  // Remove From: line at start
+                    .replace(/^Sent:.+$/m, '')  // Remove Sent: line at start
+                    .replace(/^To:.+$/m, '')  // Remove To: line at start
+                    .replace(/^Subject:.+$/m, '')  // Remove Subject: line at start
                     .trim();
             }
 
