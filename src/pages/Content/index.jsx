@@ -1208,91 +1208,89 @@ const platformAdapters = {
             return allMessageDivs.length > 0 || subjectValue.toLowerCase().startsWith('re:');
         },
         // Get the ACTUAL email being replied to (not the latest, but the specific one the user clicked "Reply" on)
+        // CRITICAL FIX: Gmail uses different selectors for thread messages vs compose box
+        // Thread messages use: div.a3s.aiL, div.ii.gt, div[data-message-id]
+        // Compose box uses: div[aria-label="Message Body"][role="textbox"]
         getEmailBeingRepliedTo: () => {
             const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
             if (!composeBody) return null;
 
-            // Find the message div that's immediately before/above the compose box
-            // This is the email the user is actually replying to
-            let currentElement = composeBody.previousElementSibling;
-            let messageDiv = null;
+            // Gmail message body selectors (in order of preference)
+            const messageBodySelectors = [
+                'div.a3s.aiL',      // Primary Gmail message body class
+                'div.ii.gt',        // Alternative Gmail message class
+                'div[data-message-id] div.a3s',  // Message with ID
+            ];
 
-            // Walk backwards from compose box to find the closest message div
-            while (currentElement && !messageDiv) {
-                // Check if this element or its children contain a message body
-                const messageBody = currentElement.querySelector('div[aria-label="Message Body"]:not([role="textbox"])')
-                    || (currentElement.getAttribute('aria-label') === 'Message Body' && currentElement.getAttribute('role') !== 'textbox' ? currentElement : null);
+            // Strategy 1: Find the message that's visually closest to (above) the compose box
+            // This is the email the user clicked "Reply" on
+            const composeRect = composeBody.getBoundingClientRect();
+            let closestMessage = null;
+            let closestDistance = Infinity;
 
-                if (messageBody) {
-                    messageDiv = messageBody;
-                    break;
-                }
-
-                // Also check if this element itself is a message body
-                if (currentElement.getAttribute('aria-label') === 'Message Body' &&
-                    currentElement.getAttribute('role') !== 'textbox') {
-                    messageDiv = currentElement;
-                    break;
-                }
-
-                currentElement = currentElement.previousElementSibling;
-            }
-
-            // If not found by walking backwards, try finding the closest message div in the parent
-            if (!messageDiv) {
-                const parent = composeBody.parentElement;
-                if (parent) {
-                    // Get all message divs and find the one closest to the compose box
-                    const allMessageDivs = Array.from(parent.querySelectorAll('div[aria-label="Message Body"]'))
-                        .filter(div => div.getAttribute('role') !== 'textbox');
-
-                    // Find the one that appears before the compose box in the DOM
-                    for (let i = 0; i < allMessageDivs.length; i++) {
-                        if (allMessageDivs[i].compareDocumentPosition(composeBody) & Node.DOCUMENT_POSITION_FOLLOWING) {
-                            messageDiv = allMessageDivs[i];
-                            break;
+            for (const selector of messageBodySelectors) {
+                const messageDivs = document.querySelectorAll(selector);
+                for (const div of messageDivs) {
+                    const divRect = div.getBoundingClientRect();
+                    // Check if this div is above the compose box (its bottom is above compose top)
+                    if (divRect.bottom <= composeRect.top && divRect.height > 0) {
+                        const distance = composeRect.top - divRect.bottom;
+                        if (distance < closestDistance) {
+                            closestDistance = distance;
+                            closestMessage = div;
                         }
                     }
+                }
+                // If found with this selector, don't try others
+                if (closestMessage) break;
+            }
 
-                    // If still not found, use the last message div before compose box position
-                    if (!messageDiv && allMessageDivs.length > 0) {
-                        // Find which message div is closest to compose box
-                        let closestDiv = null;
-                        let closestDistance = Infinity;
-                        const composeRect = composeBody.getBoundingClientRect();
-
-                        for (const div of allMessageDivs) {
-                            const divRect = div.getBoundingClientRect();
-                            // Check if this div is above the compose box
-                            if (divRect.bottom <= composeRect.top) {
-                                const distance = composeRect.top - divRect.bottom;
-                                if (distance < closestDistance) {
-                                    closestDistance = distance;
-                                    closestDiv = div;
-                                }
+            // Strategy 2: If no message found above compose, find the expanded/active message
+            // Gmail typically expands the message being replied to
+            if (!closestMessage) {
+                for (const selector of messageBodySelectors) {
+                    const messageDivs = document.querySelectorAll(selector);
+                    if (messageDivs.length > 0) {
+                        // Use the last visible message (most recently expanded)
+                        for (let i = messageDivs.length - 1; i >= 0; i--) {
+                            const div = messageDivs[i];
+                            const rect = div.getBoundingClientRect();
+                            if (rect.height > 0 && rect.width > 0) {
+                                closestMessage = div;
+                                break;
                             }
                         }
-
-                        if (closestDiv) {
-                            messageDiv = closestDiv;
-                        } else {
-                            // Fallback: use the last message div
-                            messageDiv = allMessageDivs[allMessageDivs.length - 1];
-                        }
+                        if (closestMessage) break;
                     }
                 }
             }
 
-            return messageDiv;
+            return closestMessage;
         },
         // Get thread messages for context (all messages except the one being replied to)
+        // CRITICAL FIX: Use correct Gmail selectors for thread messages
         getThreadMessages: () => {
             const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
             const composeText = composeBody?.innerText?.trim() || '';
-            const allMessageDivs = Array.from(document.querySelectorAll('div[aria-label="Message Body"]'))
-                .filter(div => {
-                    return div.getAttribute('role') !== 'textbox' && div.innerText?.trim() !== composeText;
-                });
+            
+            // Gmail message body selectors (same as getEmailBeingRepliedTo)
+            const messageBodySelectors = [
+                'div.a3s.aiL',      // Primary Gmail message body class
+                'div.ii.gt',        // Alternative Gmail message class
+            ];
+            
+            let allMessageDivs = [];
+            for (const selector of messageBodySelectors) {
+                const divs = document.querySelectorAll(selector);
+                if (divs.length > 0) {
+                    allMessageDivs = Array.from(divs).filter(div => {
+                        const text = div.innerText?.trim() || '';
+                        return text !== composeText && text.length > 0;
+                    });
+                    break;
+                }
+            }
+            
             return allMessageDivs
                 .map(div => div.innerText.trim())
                 .filter(text => text && text.length > 0 && !text.includes('Generate') && !text.includes('Respond'));
