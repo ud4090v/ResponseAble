@@ -554,7 +554,7 @@ ${emailBeingRepliedTo}
 ${previousThreadHistory ? `=== PREVIOUS THREAD HISTORY (IGNORE FOR TYPE DETERMINATION - BACKGROUND ONLY) ===
 ${previousThreadHistory}
 
-REMINDER: Determine the type based on the LATEST email above. The thread history is only for context, NOT for determining the type.
+REMINDER: Determine the type based on the "EMAIL BEING REPLIED TO" section above. The thread history is only for background context, NOT for determining the type.
 
 ` : ''}${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
             }
@@ -1225,6 +1225,9 @@ const platformAdapters = {
         // Get detailed information about the SPECIFIC email being replied to
         // CRITICAL: This function extracts the email the user clicked "Reply" on, NOT the latest email in the thread
         // When replying to email #9 in a 25-email thread, this should return email #9's content
+        // 
+        // KEY FIX: All DOM queries are scoped to the compose container to avoid picking up
+        // .gmail_quote elements from other rendered messages on the page
         getRepliedToEmailDetails: () => {
             // Subject - always the compose input (includes "Re:" for replies)
             const subjectInput = document.querySelector('input[aria-label="Subject"], input[name="subjectbox"]');
@@ -1234,65 +1237,95 @@ const platformAdapters = {
             let senderEmail = '';
             let body = '';
 
-            // STRATEGY 1: Extract from Gmail's quoted content in the compose window
+            // STRATEGY 1: Extract from Gmail's quoted content WITHIN the compose window ONLY
             // When you click "Reply" on a specific email, Gmail quotes that email in the compose window
-            // This is the MOST RELIABLE way to get the specific email being replied to
+            // CRITICAL: We must scope all queries to the compose container to avoid finding
+            // .gmail_quote elements from other rendered messages on the page
             const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
             if (composeBody) {
-                // Look for the quoted content within or near the compose area
-                // Gmail uses various selectors for quoted content
-                const quotedSelectors = [
-                    'div.gmail_quote',
-                    'blockquote.gmail_quote',
-                    'div[data-smartmail="gmail_signature"] ~ div',
-                    '.gmail_attr + div',  // Attribution line followed by quote
-                    'div.gmail_extra div.gmail_quote'
-                ];
+                // Find the compose container - this is the parent that contains the compose form
+                // We search progressively outward to find a suitable container
+                const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') || 
+                                        composeBody.closest('form') ||
+                                        composeBody.parentElement?.parentElement?.parentElement;
+                
+                if (composeContainer) {
+                    // Look for the quoted content ONLY within the compose container
+                    // Gmail uses various selectors for quoted content
+                    const quotedSelectors = [
+                        'div.gmail_quote',
+                        'blockquote.gmail_quote',
+                        'div.gmail_extra div.gmail_quote',
+                        '.gmail_attr + div'
+                    ];
 
-                let quotedContent = null;
-                for (const selector of quotedSelectors) {
-                    // Search in the compose container and its parent
-                    const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9') || composeBody.parentElement;
-                    if (composeContainer) {
+                    let quotedContent = null;
+                    for (const selector of quotedSelectors) {
+                        // ONLY search within the compose container - NO global document fallback
                         quotedContent = composeContainer.querySelector(selector);
                         if (quotedContent) break;
                     }
-                    // Also try document-level search
-                    if (!quotedContent) {
-                        quotedContent = document.querySelector(selector);
-                    }
-                }
 
-                if (quotedContent) {
-                    body = quotedContent.innerText?.trim() || quotedContent.textContent?.trim() || '';
+                    if (quotedContent) {
+                        // CRITICAL: Strip nested quotes to get ONLY the top-level quoted message
+                        // Gmail often includes the entire thread history as nested quotes
+                        // We want only Rusty's message, not TJ's original job offer below it
+                        const clonedQuote = quotedContent.cloneNode(true);
+                        
+                        // Remove all nested .gmail_quote and blockquote elements
+                        const nestedQuotes = clonedQuote.querySelectorAll('div.gmail_quote, blockquote.gmail_quote, blockquote');
+                        nestedQuotes.forEach(nested => nested.remove());
+                        
+                        // Get the text after removing nested quotes
+                        body = clonedQuote.innerText?.trim() || clonedQuote.textContent?.trim() || '';
 
-                    // Extract sender info from the attribution line (e.g., "On Jan 5, 2026, John Doe <john@example.com> wrote:")
-                    const attrLine = quotedContent.previousElementSibling;
-                    if (attrLine) {
-                        const attrText = attrLine.innerText || attrLine.textContent || '';
-                        // Pattern: "On [date], [Name] <[email]> wrote:"
-                        const attrMatch = attrText.match(/On\s+.+?,\s+(.+?)\s*<([^>]+)>\s*wrote:/i);
-                        if (attrMatch) {
-                            senderName = attrMatch[1].trim();
-                            senderEmail = attrMatch[2].trim();
-                        } else {
-                            // Try simpler pattern: "[Name] <[email]>"
-                            const simpleMatch = attrText.match(/([^<]+?)\s*<([^>]+)>/);
-                            if (simpleMatch) {
-                                senderName = simpleMatch[1].trim();
-                                senderEmail = simpleMatch[2].trim();
+                        // Extract sender info from the attribution line (e.g., "On Jan 5, 2026, John Doe <john@example.com> wrote:")
+                        // The attribution line is typically a sibling element before the quote
+                        const attrLine = quotedContent.previousElementSibling;
+                        if (attrLine) {
+                            const attrText = attrLine.innerText || attrLine.textContent || '';
+                            // Pattern: "On [date], [Name] <[email]> wrote:"
+                            const attrMatch = attrText.match(/On\s+.+?,\s+(.+?)\s*<([^>]+)>\s*wrote:/i);
+                            if (attrMatch) {
+                                senderName = attrMatch[1].trim();
+                                senderEmail = attrMatch[2].trim();
+                            } else {
+                                // Try simpler pattern: "[Name] <[email]>"
+                                const simpleMatch = attrText.match(/([^<]+?)\s*<([^>]+)>/);
+                                if (simpleMatch) {
+                                    senderName = simpleMatch[1].trim();
+                                    senderEmail = simpleMatch[2].trim();
+                                }
+                            }
+                        }
+                        
+                        // Also look for attribution within the quote itself (sometimes Gmail puts it inside)
+                        if (!senderName) {
+                            const attrDiv = composeContainer.querySelector('.gmail_attr');
+                            if (attrDiv) {
+                                const attrText = attrDiv.innerText || attrDiv.textContent || '';
+                                const attrMatch = attrText.match(/On\s+.+?,\s+(.+?)\s*<([^>]+)>\s*wrote:/i);
+                                if (attrMatch) {
+                                    senderName = attrMatch[1].trim();
+                                    senderEmail = attrMatch[2].trim();
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // STRATEGY 2: If no quoted content found, use the email div above the compose box
+            // STRATEGY 2: If no quoted content found in compose, use the email div above the compose box
             // This is the email the user is replying to in the thread view
             if (!body) {
                 const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
                 if (emailBeingRepliedTo) {
-                    body = emailBeingRepliedTo.innerText?.trim() || emailBeingRepliedTo.textContent?.trim() || '';
+                    // Clone and strip nested quotes from this too
+                    const clonedEmail = emailBeingRepliedTo.cloneNode(true);
+                    const nestedQuotes = clonedEmail.querySelectorAll('div.gmail_quote, blockquote.gmail_quote, blockquote');
+                    nestedQuotes.forEach(nested => nested.remove());
+                    
+                    body = clonedEmail.innerText?.trim() || clonedEmail.textContent?.trim() || '';
 
                     // Get sender info from the message container
                     const container = emailBeingRepliedTo.closest('[role="listitem"]') || emailBeingRepliedTo.parentElement;
@@ -1306,62 +1339,70 @@ const platformAdapters = {
                 }
             }
 
-            // STRATEGY 3: Fallback - look for sender header elements
-            if (!senderName) {
-                // Try multiple selectors to find the sender header
-                let senderHeader = document.querySelector('div.iw, h3.iw, div.quoted_text ~ div.iw');
+            // STRATEGY 3: Fallback - look for sender header elements WITHIN the compose context
+            if (!senderName && composeBody) {
+                const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') || 
+                                        composeBody.closest('form') ||
+                                        composeBody.parentElement?.parentElement?.parentElement;
+                
+                if (composeContainer) {
+                    // Try to find sender header within compose container
+                    let senderHeader = composeContainer.querySelector('div.iw, h3.iw');
 
-                // If not found, try to find it near the quoted content
-                if (!senderHeader) {
-                    const quotedBodyElement = document.querySelector('div.gmail_quote, blockquote.gmail_quote');
-                    if (quotedBodyElement) {
-                        let currentElement = quotedBodyElement.previousElementSibling;
-                        while (currentElement && !senderHeader) {
-                            if (currentElement.classList.contains('iw') ||
-                                currentElement.querySelector('span[name], span[email]')) {
-                                senderHeader = currentElement;
-                                break;
+                    // If not found, try to find it near the quoted content within compose
+                    if (!senderHeader) {
+                        const quotedBodyElement = composeContainer.querySelector('div.gmail_quote, blockquote.gmail_quote');
+                        if (quotedBodyElement) {
+                            let currentElement = quotedBodyElement.previousElementSibling;
+                            while (currentElement && !senderHeader) {
+                                if (currentElement.classList.contains('iw') ||
+                                    currentElement.querySelector('span[name], span[email]')) {
+                                    senderHeader = currentElement;
+                                    break;
+                                }
+                                currentElement = currentElement.previousElementSibling;
                             }
-                            currentElement = currentElement.previousElementSibling;
+                        }
+                    }
+
+                    if (senderHeader) {
+                        // Try to get name from span[name] attribute
+                        const nameSpan = senderHeader.querySelector('span[name]');
+                        if (nameSpan) {
+                            senderName = nameSpan.getAttribute('name') || '';
+                        }
+
+                        // Try to get email from span[email] attribute
+                        const emailSpan = senderHeader.querySelector('span[email]');
+                        if (emailSpan) {
+                            senderEmail = emailSpan.getAttribute('email') || '';
+                        }
+
+                        // If name not found, try extracting from text content
+                        if (!senderName) {
+                            const text = senderHeader.innerText || senderHeader.textContent || '';
+                            // Look for patterns like "Name <email@domain.com>" or "Name (Company)"
+                            const nameMatch = text.match(/^([^<(]+?)(?:\s*<|$)/);
+                            if (nameMatch) {
+                                senderName = nameMatch[1].trim();
+                            } else {
+                                senderName = text.trim();
+                            }
                         }
                     }
                 }
-
-                // Also try finding sender info from the email being replied to div
-                if (!senderHeader) {
-                    const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
-                    if (emailBeingRepliedTo) {
-                        const container = emailBeingRepliedTo.closest('[role="listitem"]') || emailBeingRepliedTo.parentElement;
-                        if (container) {
-                            senderHeader = container.querySelector('div.iw, h3.iw, span[name], span[email]')?.closest('div') ||
-                                container.querySelector('span[name], span[email]')?.parentElement;
-                        }
-                    }
-                }
-
-                if (senderHeader) {
-                    // Try to get name from span[name] attribute
-                    const nameSpan = senderHeader.querySelector('span[name]');
-                    if (nameSpan) {
-                        senderName = nameSpan.getAttribute('name') || '';
-                    }
-
-                    // Try to get email from span[email] attribute
-                    const emailSpan = senderHeader.querySelector('span[email]');
-                    if (emailSpan) {
-                        senderEmail = emailSpan.getAttribute('email') || '';
-                    }
-
-                    // If name not found, try extracting from text content
-                    if (!senderName) {
-                        const text = senderHeader.innerText || senderHeader.textContent || '';
-                        // Look for patterns like "Name <email@domain.com>" or "Name (Company)"
-                        const nameMatch = text.match(/^([^<(]+?)(?:\s*<|$)/);
-                        if (nameMatch) {
-                            senderName = nameMatch[1].trim();
-                        } else {
-                            senderName = text.trim();
-                        }
+            }
+            
+            // STRATEGY 4: Last resort - use getEmailBeingRepliedTo for sender info
+            if (!senderName) {
+                const emailBeingRepliedTo = platformAdapters.gmail.getEmailBeingRepliedTo();
+                if (emailBeingRepliedTo) {
+                    const container = emailBeingRepliedTo.closest('[role="listitem"]') || emailBeingRepliedTo.parentElement;
+                    if (container) {
+                        const nameSpan = container.querySelector('span[name]');
+                        const emailSpan = container.querySelector('span[email]');
+                        if (nameSpan) senderName = nameSpan.getAttribute('name') || '';
+                        if (emailSpan) senderEmail = emailSpan.getAttribute('email') || '';
                     }
                 }
             }
@@ -1374,7 +1415,7 @@ const platformAdapters = {
             const ccInput = document.querySelector('input[name="cc"], input[aria-label="Cc"]');
             const ccRecipients = ccInput ? ccInput.value : '';
 
-            // Clean up the body - remove common noise
+            // Clean up the body - remove common noise and strip any remaining nested quote markers
             if (body) {
                 body = body
                     .replace(/^On .+ wrote:\s*/i, '')  // Remove attribution line if it got included
@@ -1383,6 +1424,9 @@ const platformAdapters = {
                     .replace(/^Sent:.+$/m, '')  // Remove Sent: line
                     .replace(/^To:.+$/m, '')  // Remove To: line
                     .replace(/^Subject:.+$/m, '')  // Remove Subject: line
+                    // Also strip any text after common quote markers that might indicate nested content
+                    .replace(/\n-+\s*Forwarded message\s*-+[\s\S]*/im, '')  // Remove forwarded message content
+                    .replace(/\n>+\s*On .+ wrote:[\s\S]*/im, '')  // Remove inline quote markers
                     .trim();
             }
 
@@ -2334,7 +2378,7 @@ ${emailBeingRepliedTo}
 ${previousThreadHistory ? `=== PREVIOUS THREAD HISTORY (IGNORE THIS - FOR BACKGROUND CONTEXT ONLY) ===
 ${previousThreadHistory}
 
-REMINDER: You are replying to the LATEST email above. DO NOT respond to anything in the thread history. The thread history is only for understanding context, NOT for determining what to respond to.
+REMINDER: You are replying to the "EMAIL BEING REPLIED TO" section above. DO NOT respond to anything in the thread history. The thread history is only for understanding background context, NOT for determining what to respond to.
 
 ` : ''}${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}
 
