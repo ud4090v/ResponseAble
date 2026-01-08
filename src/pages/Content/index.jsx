@@ -227,6 +227,7 @@ const detectPlatform = () => {
 const ALL_PACKAGES = [
     {
         "name": "sales",
+        "base": false,
         "description": "emails about deals, follow-ups, objections, meetings, and closing business",
         "intent": "The sender is selling a product or service to the recipient. Consider their approach: cold outreach (initial contact), follow-up (nudge after no response), offering discount (price incentive), value proposition (highlight benefits), or closing (meeting/demo request).",
         "roleDescription": "a world-class B2B sales email writer",
@@ -234,6 +235,7 @@ const ALL_PACKAGES = [
     },
     {
         "name": "recruitment",
+        "base": false,
         "description": "emails about hiring, candidates, sourcing talent, interviews, and job offers",
         "intent": "The sender is a recruiter offering a job position or opportunity to the recipient. Consider what they're offering: specific role details, interview invitation, salary range, company culture fit, or next steps in hiring process.",
         "roleDescription": "a professional candidate responding to a recruiter's job offer",
@@ -241,6 +243,7 @@ const ALL_PACKAGES = [
     },
     {
         "name": "jobseeker",
+        "base": false,
         "description": "emails about job applications, interviews, follow-ups as a candidate, and career opportunities",
         "intent": "The sender is a job seeker applying to or following up with the recipient. Consider their intent: expressing interest in a role, attaching resume, requesting interview, thanking after meeting, or seeking referrals.",
         "roleDescription": "a hiring manager or recruiter responding to a job application",
@@ -248,6 +251,7 @@ const ALL_PACKAGES = [
     },
     {
         "name": "support",
+        "base": false,
         "description": "emails about customer issues, complaints, troubleshooting, and resolutions",
         "intent": "The sender is seeking help or reporting an issue to the recipient. Consider the problem: technical bug, billing inquiry, feature request, or service complaint, and urgency level.",
         "roleDescription": "an empathetic customer support specialist",
@@ -255,6 +259,7 @@ const ALL_PACKAGES = [
     },
     {
         "name": "networking",
+        "base": false,
         "description": "emails about professional connections, introductions, referrals, and collaborations",
         "intent": "The sender is building or maintaining a professional relationship with the recipient. Consider the goal: warm introduction, referral request, collaboration proposal, or staying in touch after event.",
         "roleDescription": "a professional building genuine connections",
@@ -262,6 +267,7 @@ const ALL_PACKAGES = [
     },
     {
         "name": "generic",
+        "base": true,
         "description": "general professional emails not fitting specific categories",
         "intent": "The sender has a neutral professional intent toward the recipient. Consider basic goals like information sharing, scheduling, or simple acknowledgments without strong sales/hiring/support elements.",
         "roleDescription": "a professional email reply writer",
@@ -275,7 +281,7 @@ const getUserPackages = async () => {
         const browserAPI = typeof chrome !== 'undefined' && chrome.storage ? chrome : (typeof browser !== 'undefined' && browser.storage ? browser : null);
         if (!browserAPI || !browserAPI.storage) {
             // Fallback to generic if storage is not available
-            resolve(ALL_PACKAGES.filter(p => p.name === 'generic'));
+            resolve(ALL_PACKAGES.filter(p => p.base));
             return;
         }
 
@@ -288,8 +294,8 @@ const getUserPackages = async () => {
             const userPackages = ALL_PACKAGES.filter(p => selectedPackageNames.includes(p.name));
 
             // Ensure generic is always available as fallback
-            if (userPackages.length === 0 || !userPackages.find(p => p.name === 'generic')) {
-                const genericPackage = ALL_PACKAGES.find(p => p.name === 'generic');
+            if (userPackages.length === 0 || !userPackages.find(p => p.base)) {
+                const genericPackage = ALL_PACKAGES.find(p => p.base);
                 if (genericPackage) {
                     userPackages.push(genericPackage);
                 }
@@ -534,12 +540,10 @@ Analyze the provided email context and determine which package it best fits.
 CRITICAL CONTEXT HANDLING:
 - You will receive TWO sections: "EMAIL BEING REPLIED TO" and optionally "PREVIOUS THREAD HISTORY"
 - The "EMAIL BEING REPLIED TO" is the SPECIFIC email the user clicked "Reply" on - this could be ANY email in the thread, not necessarily the latest
-- For example, in a 25-email thread about a job offer, if the user replies to email #9 which asks "Did you receive the background check email?", you should classify based on that SPECIFIC question, NOT the overall job offer topic
 - The thread history is ONLY for understanding the broader conversation context - DO NOT use it to determine the type
 
 CLASSIFICATION RULES:
 - Determine the type based SOLELY on what the sender is asking/doing in the "EMAIL BEING REPLIED TO" section
-- If the specific email is a simple follow-up question (e.g., "Did you receive X?"), classify it as "generic" or the most appropriate simple type, NOT based on the thread's main topic
 - The thread history should NEVER override the specific email's classification
 
 Return ONLY a valid JSON object with exactly this structure:
@@ -558,7 +562,6 @@ Return ONLY a valid JSON object with exactly this structure:
 Rules:
 - Only choose from the listed packages above.
 - Return the COMPLETE matched_type object including name, description, intent, roleDescription, and contextSpecific from the matched package.
-- If no package strongly matches, return the "generic" package with all its attributes.
 - Be precise and use both description and intent to guide your decision.
 - PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO - ignore thread history for type determination.`;
 
@@ -617,26 +620,47 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
             console.error('Type determination error:', typeError);
             // Fallback to generic type
             typeMatchResult = {
-                matched_type: userPackages.find(p => p.name === 'generic'),
+                matched_type: userPackages.find(p => p.base),
                 confidence: 1.0,
                 reason: 'Type determination failed, using generic fallback'
             };
         }
 
-        const matchedType = typeMatchResult.matched_type || userPackages.find(p => p.name === 'generic');
+        let matchedType = typeMatchResult.matched_type || userPackages.find(p => p.base);
+
+        // Ensure matchedType has the base property by finding it in userPackages or ALL_PACKAGES
+        if (matchedType && !matchedType.hasOwnProperty('base')) {
+            const foundPackage = userPackages.find(p => p.name === matchedType.name) || ALL_PACKAGES.find(p => p.name === matchedType.name);
+            if (foundPackage) {
+                matchedType = foundPackage;
+            }
+        }
+
         const packageName = matchedType.name;
         const typeIntent = matchedType.intent;
 
         // ============================================================================
         // STEP 2: INTENT/GOALS DETERMINATION - FOCUS_EMAIL ONLY (COMPLETELY ISOLATED)
         // ============================================================================
-        // CRITICAL: This call sees ONLY the FOCUS_EMAIL - NO thread history at all
-        // This ensures intent and goals are determined solely from the specific email
-        // BUT: We now include type-specific context to guide appropriate intent and variant generation
-        const intentGoalsPrompt = `You are an expert email classifier. Analyze ONLY the provided email and return a JSON object with:
+        let intentGoalsResult;
+
+        // Check if this is the base (generic) package - use explicit check
+        const isBasePackage = matchedType && (matchedType.base === true || matchedType.name === 'generic');
+
+        if (isBasePackage) {          // if package is base package - Generic
+            // Type not available in user's packages - use generic intent logic
+            // Intent is defaulted to generic.intent, goals are determined based on generic intent
+            const genericIntent = matchedType.intent;
+
+            const genericGoalsPrompt = `You are an expert email classifier. The intent has ALREADY been determined as a generic professional intent. Your task is ONLY to determine response goals based on this generic intent.
+
+The generic intent is: "${genericIntent}"
+
+CRITICAL: Do NOT analyze the email content to determine or infer any intent. The intent is already provided above. Your job is ONLY to determine appropriate response goals that address this generic intent.
+
+Return a JSON object with:
 {
-  "intent": Determine the sender's primary intent from the recipient's perspective. What is the sender specifically asking, requesting, or doing in THIS email? Be specific and contextual.
-  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. Base these ONLY on what the sender is specifically asking or doing. For example, if the email asks "Did you receive X?", the goal should be "Confirm receipt of X", NOT "Express interest in opportunity". The goals must directly address what the sender is asking for.
+  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. These goals MUST be based on and directly address the generic intent provided above. Each goal should be a specific action the recipient should take to respond to that generic intent. Do NOT infer specific intent from the email - use only the generic intent provided.
   "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
   "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
   "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
@@ -644,58 +668,133 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
   "key_topics": array of strings (max 5, based on the email content)
 }
 
-EMAIL TYPE CONTEXT:
-- Matched Type: ${packageName}
-- Type Description: ${matchedType.description}
-${typeIntent ? `- Type-Specific Intent Guidance: ${typeIntent}` : ''}
+Email content (ONLY for extracting recipient_name, recipient_company, and key_topics - DO NOT use it to determine intent or goals):
+${emailBeingRepliedTo}
+
+${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}
 
 CRITICAL INSTRUCTIONS:
-- Focus ONLY on what THIS specific email is asking or doing. If it asks a question like "Did you receive X?", the intent must be about that question and goals must be about answering it.
-${packageName === 'generic' ? '- IMPORTANT: This is a GENERIC email type. Keep the intent, goals, and variants truly generic and neutral. Do NOT assume business relationships, job contexts, or specific professional scenarios unless explicitly mentioned in the email. Generic means simple, straightforward, and context-neutral.' : ''}
+- The intent is ALREADY determined as: "${genericIntent}" - do NOT analyze the email to determine intent
+- Use ONLY the generic intent provided above to determine goals - do NOT infer specific intent from email content
+- Goals should be generic professional response goals that address the generic intent, not specific to the email content
+- Only use the email content to extract recipient_name, recipient_company, and key_topics
+- Do NOT include an "intent" field in your JSON response - the intent is already determined
+- Return ONLY valid JSON, no other text.`;
+
+            const genericGoalsMessages = [
+                {
+                    role: 'system',
+                    content: genericGoalsPrompt
+                }
+            ];
+
+            try {
+                const genericGoalsData = await callProxyAPI(
+                    apiConfig.provider,
+                    classificationModel,
+                    genericGoalsMessages,
+                    0.3,
+                    1500
+                );
+                let genericGoalsContent = genericGoalsData.choices?.[0]?.message?.content || '{}';
+                genericGoalsContent = genericGoalsContent.trim();
+                if (genericGoalsContent.startsWith('```json')) {
+                    genericGoalsContent = genericGoalsContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+                } else if (genericGoalsContent.startsWith('```')) {
+                    genericGoalsContent = genericGoalsContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                }
+                const genericGoalsResult = JSON.parse(genericGoalsContent);
+
+                // Use generic intent and goals from the result
+                // CRITICAL: Always use genericIntent, ignore any intent field the AI might return
+                // Explicitly delete any intent field from AI response to prevent accidental use
+                if (genericGoalsResult.intent) {
+                    delete genericGoalsResult.intent;
+                }
+
+                intentGoalsResult = {
+                    intent: genericIntent,  // Always use the generic intent, never from email analysis
+                    response_goals: genericGoalsResult.response_goals || ['Respond appropriately', 'Address the question', 'Provide information'],
+                    goal_titles: genericGoalsResult.goal_titles || {},
+                    variant_sets: genericGoalsResult.variant_sets || {},
+                    recipient_name: genericGoalsResult.recipient_name || actualSenderName || 'there',
+                    recipient_company: genericGoalsResult.recipient_company || null,
+                    key_topics: genericGoalsResult.key_topics || []
+                };
+            } catch (genericError) {
+                console.error('Generic goals determination error:', genericError);
+                // Fallback with generic values
+                intentGoalsResult = {
+                    intent: genericIntent,
+                    response_goals: ['Respond appropriately', 'Address the question', 'Provide information'],
+                    goal_titles: {},
+                    variant_sets: {},
+                    recipient_name: actualSenderName || 'there',
+                    recipient_company: null,
+                    key_topics: []
+                };
+            }
+        } else {
+            // Type is available - use normal intent/goals determination from email
+            // CRITICAL: This call sees ONLY the FOCUS_EMAIL - NO thread history at all
+            // This ensures intent and goals are determined solely from the specific email
+            // BUT: We now include type-specific context to guide appropriate intent and variant generation
+            const intentGoalsPrompt = `You are an expert email classifier. Analyze ONLY the provided email and return a JSON object with:
+{
+  "intent": Determine the sender's primary intent from the recipient's perspective. What is the sender specifically asking, requesting, or doing in THIS email? Be specific and contextual.
+  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. These goals MUST be based on and directly address the intent you determined above. Each goal should be a specific action the recipient should take to respond to that intent.
+  "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
+  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
+  "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
+  "recipient_company": string or null (the company of the person who SENT this email),
+  "key_topics": array of strings (max 5, based on the email content)
+}
+
+CRITICAL INSTRUCTIONS:
 Return ONLY valid JSON, no other text.`;
 
-        const intentGoalsMessages = [
-            {
-                role: 'system',
-                content: intentGoalsPrompt
-            },
-            {
-                role: 'user',
-                content: `${emailBeingRepliedTo}
+            const intentGoalsMessages = [
+                {
+                    role: 'system',
+                    content: intentGoalsPrompt
+                },
+                {
+                    role: 'user',
+                    content: `${emailBeingRepliedTo}
 
 ${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
-            }
-        ];
+                }
+            ];
 
-        let intentGoalsResult;
-        try {
-            const intentGoalsData = await callProxyAPI(
-                apiConfig.provider,
-                classificationModel,
-                intentGoalsMessages,
-                0.3,
-                1500
-            );
-            let intentGoalsContent = intentGoalsData.choices?.[0]?.message?.content || '{}';
-            intentGoalsContent = intentGoalsContent.trim();
-            if (intentGoalsContent.startsWith('```json')) {
-                intentGoalsContent = intentGoalsContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-            } else if (intentGoalsContent.startsWith('```')) {
-                intentGoalsContent = intentGoalsContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+            try {
+                const intentGoalsData = await callProxyAPI(
+                    apiConfig.provider,
+                    classificationModel,
+                    intentGoalsMessages,
+                    0.3,
+                    1500
+                );
+                let intentGoalsContent = intentGoalsData.choices?.[0]?.message?.content || '{}';
+                intentGoalsContent = intentGoalsContent.trim();
+                if (intentGoalsContent.startsWith('```json')) {
+                    intentGoalsContent = intentGoalsContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+                } else if (intentGoalsContent.startsWith('```')) {
+                    intentGoalsContent = intentGoalsContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                }
+                intentGoalsResult = JSON.parse(intentGoalsContent);
+            } catch (intentError) {
+                console.error('Intent/Goals determination error:', intentError);
+                // Fallback with generic values
+                intentGoalsResult = {
+                    intent: 'General inquiry or follow-up',
+                    response_goals: ['Respond appropriately', 'Address the question', 'Provide information'],
+                    goal_titles: {},
+                    variant_sets: {},
+                    recipient_name: actualSenderName || 'there',
+                    recipient_company: null,
+                    key_topics: []
+                };
             }
-            intentGoalsResult = JSON.parse(intentGoalsContent);
-        } catch (intentError) {
-            console.error('Intent/Goals determination error:', intentError);
-            // Fallback with generic values
-            intentGoalsResult = {
-                intent: 'General inquiry or follow-up',
-                response_goals: ['Respond appropriately', 'Address the question', 'Provide information'],
-                goal_titles: {},
-                variant_sets: {},
-                recipient_name: actualSenderName || 'there',
-                recipient_company: null,
-                key_topics: []
-            };
         }
 
         // ============================================================================
@@ -2406,19 +2505,18 @@ Write in a way that sounds like YOU wrote it, matching your typical communicatio
 CRITICAL CONTEXT HANDLING:
 - You will receive TWO sections: "EMAIL BEING REPLIED TO" and optionally "PREVIOUS THREAD HISTORY"
 - The "EMAIL BEING REPLIED TO" is the SPECIFIC email the user clicked "Reply" on - this could be ANY email in the thread, not necessarily the latest
-- For example, in a 25-email job offer thread, if the user replies to email #9 which asks "Did you receive the background check email?", your response should ONLY address that question (e.g., "Yes, I received it" or "No, I haven't received it yet"), NOT express enthusiasm about the job offer
 - The thread history is ONLY for understanding the broader conversation context - DO NOT respond to topics from thread history
 
 RESPONSE RULES:
 - Directly address ONLY the content, questions, and intent of the "EMAIL BEING REPLIED TO" section
-- If the specific email asks a simple question (e.g., "Did you receive X?"), give a direct answer to that question
+- If the specific email asks a simple question, give a direct answer to that question
 - DO NOT bring up topics from thread history unless they are directly relevant to answering the specific email
 - Your response must ONLY address what the sender said in the "EMAIL BEING REPLIED TO" section
 
 IMPORTANT FORMATTING REQUIREMENTS:
 - Each variant should be a complete email ready to send, including greeting, body text, and closing
 - Do NOT include variant labels, numbers, or strategy names in the response text
-- Start each email directly with the greeting (e.g., "Dear [Name]," or "Hi [Name],")
+- Start each email directly with the greeting
 - Separate each complete email response with exactly "---RESPONSE---" on its own line
 - Keep each reply under 150 words
 - Sound human, not robotic
@@ -2443,7 +2541,7 @@ Best regards,`;
         const userPackages = await getUserPackages();
 
         // Get matched type from userPackages based on classification.type
-        const matchedPackage = userPackages.find(p => p.name === classification.type) || userPackages.find(p => p.name === 'generic');
+        const matchedPackage = userPackages.find(p => p.name === classification.type) || userPackages.find(p => p.base);
         const roleDescription = matchedPackage.roleDescription;
         const contextSpecific = matchedPackage.contextSpecific;
 
@@ -2489,19 +2587,18 @@ Write in a way that sounds like YOU wrote it, matching your typical communicatio
 CRITICAL CONTEXT HANDLING:
 - You will receive TWO sections: "MESSAGE BEING REPLIED TO" and optionally "PREVIOUS CONVERSATION HISTORY"
 - The "MESSAGE BEING REPLIED TO" is the SPECIFIC message the user clicked "Reply" on - this could be ANY message in the conversation, not necessarily the latest
-- For example, in a long conversation about a job opportunity, if the user replies to a message asking "Did you receive my portfolio?", your response should ONLY address that question, NOT express enthusiasm about the opportunity
 - The conversation history is ONLY for understanding the broader context - DO NOT respond to topics from conversation history
 
 RESPONSE RULES:
 - Directly address ONLY the content, questions, and intent of the "MESSAGE BEING REPLIED TO" section
-- If the specific message asks a simple question (e.g., "Did you receive X?"), give a direct answer to that question
+- If the specific message asks a simple question, give a direct answer to that question
 - DO NOT bring up topics from conversation history unless they are directly relevant to answering the specific message
 - Your response must ONLY address what the sender said in the "MESSAGE BEING REPLIED TO" section
 
 IMPORTANT FORMATTING REQUIREMENTS:
 - Each variant should be a complete message ready to send, including greeting, body text, and closing
 - Do NOT include variant labels, numbers, or strategy names in the response text
-- Start each message directly with the greeting (e.g., "Hi [Name]," or "Hello [Name],")
+- Start each message directly with the greeting
 - Separate each complete message response with exactly "---RESPONSE---" on its own line
 - Keep it professional, concise, and under 150 words
 - Sound human, not robotic
@@ -2612,12 +2709,13 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     const selectedPackageNames = selectedPackages.map(p => p.name).join(', ');
 
     // Get matched type information from classification
+    // Use ALL_PACKAGES (not userPackages) to get the full package definition with base property
     let matchedTypeInfo = null;
     if (classification && classification.type) {
         const matchedPackage = ALL_PACKAGES.find(p => p.name === classification.type);
         if (matchedPackage) {
             matchedTypeInfo = {
-                name: matchedPackage.name,
+                name: matchedPackage.base === true ? 'Base' : matchedPackage.name,
                 description: matchedPackage.description
             };
         }
