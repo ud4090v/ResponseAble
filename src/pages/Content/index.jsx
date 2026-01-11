@@ -3010,7 +3010,7 @@ Return ONLY valid JSON, no other text.`;
         // Create classification for display (single goal, no tabs, but multiple variants)
         const classification = {
             type: genericPackage.name, // Use actual package name, not hardcoded 'generic'
-            intent: genericPackage.intent,
+            intent: genericPackage.userIntent,
             response_goals: [goal],
             goal_titles: { [goal]: 'Draft' },
             variant_sets: { [goal]: variantLabels },
