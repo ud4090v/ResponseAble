@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
+import ALL_PACKAGES_DATA from '../../config/packages.json';
 
 // Ensure chrome API is available
 const getChromeRuntime = () => {
@@ -19,7 +20,11 @@ let apiConfig = {
     provider: 'grok',
     model: 'grok-4-latest',
     numVariants: 4,
+    classificationConfidenceThreshold: 0.85,
 };
+
+// Fixed separator for parsing response variants - must match what we instruct AI to use
+const RESPONSE_VARIANT_SEPARATOR = '|||RESPONSE_VARIANT|||';
 
 // Helper function to make API calls through Vercel proxy
 const callProxyAPI = async (provider, model, messages, temperature = 0.8, max_tokens = 1000) => {
@@ -69,12 +74,14 @@ const loadApiConfig = async () => {
             resolve(apiConfig);
             return;
         }
-        storage.sync.get(['apiProvider', 'apiModel', 'numVariants'], (result) => {
+        storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'classificationConfidenceThreshold'], (result) => {
             const numVariants = result.numVariants || 4;
+            const confidenceThreshold = result.classificationConfidenceThreshold !== undefined ? result.classificationConfidenceThreshold : 0.85;
             apiConfig = {
                 provider: result.apiProvider || 'grok',
                 model: result.apiModel || 'grok-4-latest',
                 numVariants: Math.max(1, Math.min(7, numVariants)), // Clamp between 1 and 7
+                classificationConfidenceThreshold: Math.max(0.0, Math.min(1.0, confidenceThreshold)), // Clamp between 0.0 and 1.0
             };
             resolve(apiConfig);
         });
@@ -88,7 +95,7 @@ loadApiConfig();
 const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
 if (storage) {
     storage.onChanged.addListener((changes) => {
-        if (changes.apiProvider || changes.apiModel || changes.numVariants) {
+        if (changes.apiProvider || changes.apiModel || changes.numVariants || changes.classificationConfidenceThreshold) {
             loadApiConfig();
         }
     });
@@ -223,77 +230,53 @@ const detectPlatform = () => {
     return null;
 };
 
-// Master list of all available packages for email type classification
-const ALL_PACKAGES = [
-    {
-        "name": "sales",
-        "base": false,
-        "description": "emails about deals, follow-ups, objections, meetings, and closing business",
-        "intent": "The sender is selling a product or service to the recipient. Consider their approach: cold outreach (initial contact), follow-up (nudge after no response), offering discount (price incentive), value proposition (highlight benefits), or closing (meeting/demo request).",
-        "roleDescription": "a world-class B2B sales email writer",
-        "contextSpecific": "Respond as a potential customer evaluating the offer. Consider: pricing, value proposition, fit with your needs, and next steps. Use variants that match your interest level and decision-making stage."
-    },
-    {
-        "name": "recruitment",
-        "base": false,
-        "description": "emails about hiring, candidates, sourcing talent, interviews, and job offers",
-        "intent": "The sender is a recruiter offering a job position or opportunity to the recipient. Consider what they're offering: specific role details, interview invitation, salary range, company culture fit, or next steps in hiring process.",
-        "roleDescription": "a professional candidate responding to a recruiter's job offer",
-        "contextSpecific": "The sender (recruiter) is OFFERING a job position to YOU (the recipient/candidate). Respond as the candidate - express interest, ask questions about the role/company/compensation, or politely decline. Consider: role fit, career goals, compensation, company culture, and work-life balance. Do NOT respond as if you are offering them a job."
-    },
-    {
-        "name": "jobseeker",
-        "base": false,
-        "description": "emails about job applications, interviews, follow-ups as a candidate, and career opportunities",
-        "intent": "The sender is a job seeker applying to or following up with the recipient. Consider their intent: expressing interest in a role, attaching resume, requesting interview, thanking after meeting, or seeking referrals.",
-        "roleDescription": "a hiring manager or recruiter responding to a job application",
-        "contextSpecific": "The sender is applying for a position. Respond as the recipient (hiring manager/recruiter). Consider: candidate qualifications, fit with role requirements, next steps in hiring process, and providing constructive feedback if declining."
-    },
-    {
-        "name": "support",
-        "base": false,
-        "description": "emails about customer issues, complaints, troubleshooting, and resolutions",
-        "intent": "The sender is seeking help or reporting an issue to the recipient. Consider the problem: technical bug, billing inquiry, feature request, or service complaint, and urgency level.",
-        "roleDescription": "an empathetic customer support specialist",
-        "contextSpecific": "Address the customer's concern professionally and helpfully. Consider: urgency, impact, resolution options, escalation needs, and customer satisfaction. Provide clear next steps and timelines."
-    },
-    {
-        "name": "networking",
-        "base": false,
-        "description": "emails about professional connections, introductions, referrals, and collaborations",
-        "intent": "The sender is building or maintaining a professional relationship with the recipient. Consider the goal: warm introduction, referral request, collaboration proposal, or staying in touch after event.",
-        "roleDescription": "a professional building genuine connections",
-        "contextSpecific": "Build a meaningful professional relationship. Consider: mutual value, relationship building, reciprocity, and long-term connection. Keep it professional, warm, and relationship-focused."
-    },
-    {
-        "name": "generic",
-        "base": true,
-        "description": "general professional emails not fitting specific categories",
-        "intent": "The sender has a neutral professional intent toward the recipient. Consider basic goals like information sharing, scheduling, or simple acknowledgments without strong sales/hiring/support elements.",
-        "roleDescription": "a professional email reply writer",
-        "contextSpecific": "Carefully analyze the source email to understand the context, relationship, and intent. Respond appropriately from the recipient's perspective, considering the specific situation and relationship dynamics."
-    }
-];
+// Master list of all available packages for email type classification - imported from shared config
+const ALL_PACKAGES = ALL_PACKAGES_DATA;
 
-// Function to get user-selected packages from storage, defaulting to ['generic'] if none selected
+// Helper function to get the base package name dynamically
+const getBasePackageName = () => {
+    const basePackage = ALL_PACKAGES_DATA.find(p => p.base === true);
+    return basePackage ? basePackage.name : 'generic'; // Fallback if no base package found
+};
+
+// Function to get user's default role from storage
+const getDefaultRole = async () => {
+    return new Promise((resolve) => {
+        const browserAPI = typeof chrome !== 'undefined' && chrome.storage ? chrome : (typeof browser !== 'undefined' && browser.storage ? browser : null);
+        if (!browserAPI || !browserAPI.storage) {
+            resolve(getBasePackageName());
+            return;
+        }
+
+        browserAPI.storage.sync.get(['defaultRole'], (result) => {
+            const defaultRole = result.defaultRole && typeof result.defaultRole === 'string'
+                ? result.defaultRole
+                : getBasePackageName();
+            resolve(defaultRole);
+        });
+    });
+};
+
+// Function to get user-selected packages from storage, defaulting to base package if none selected
 const getUserPackages = async () => {
     return new Promise((resolve) => {
         const browserAPI = typeof chrome !== 'undefined' && chrome.storage ? chrome : (typeof browser !== 'undefined' && browser.storage ? browser : null);
         if (!browserAPI || !browserAPI.storage) {
-            // Fallback to generic if storage is not available
+            // Fallback to base package if storage is not available
             resolve(ALL_PACKAGES.filter(p => p.base));
             return;
         }
 
         browserAPI.storage.sync.get(['selectedPackages'], (result) => {
+            const basePackageName = getBasePackageName();
             const selectedPackageNames = result.selectedPackages && Array.isArray(result.selectedPackages) && result.selectedPackages.length > 0
                 ? result.selectedPackages
-                : ['generic']; // Default to generic if none selected
+                : [basePackageName]; // Default to base package if none selected
 
             // Filter ALL_PACKAGES to only include selected packages
             const userPackages = ALL_PACKAGES.filter(p => selectedPackageNames.includes(p.name));
 
-            // Ensure generic is always available as fallback
+            // Ensure base package is always available as fallback
             if (userPackages.length === 0 || !userPackages.find(p => p.base)) {
                 const genericPackage = ALL_PACKAGES.find(p => p.base);
                 if (genericPackage) {
@@ -521,7 +504,7 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         // Get numVariants for the classification prompt
         const numVariants = apiConfig.numVariants || 4;
 
-        // Get user-selected packages from storage (defaults to ['generic'] if none selected)
+        // Get user-selected packages from storage (defaults to base package if none selected)
         const userPackages = await getUserPackages();
 
         // Format packages as string for type determination prompt
@@ -560,7 +543,8 @@ Return ONLY a valid JSON object with exactly this structure:
 }
 
 Rules:
-- Only choose from the listed packages above.
+- CRITICAL: You MUST only choose from the packages listed above. Do NOT return a package name that is not in the list.
+- If the email doesn't clearly match any of the listed packages, return the base package (the one with base: true, if available in the list above).
 - Return the COMPLETE matched_type object including name, description, intent, roleDescription, and contextSpecific from the matched package.
 - Be precise and use both description and intent to guide your decision.
 - PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO - ignore thread history for type determination.`;
@@ -618,15 +602,22 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
             typeMatchResult = JSON.parse(typeContent);
         } catch (typeError) {
             console.error('Type determination error:', typeError);
-            // Fallback to generic type
+            // Fallback to base package type
             typeMatchResult = {
                 matched_type: userPackages.find(p => p.base),
                 confidence: 1.0,
-                reason: 'Type determination failed, using generic fallback'
+                reason: 'Type determination failed, using base package fallback'
             };
         }
 
         let matchedType = typeMatchResult.matched_type || userPackages.find(p => p.base);
+
+        // Check confidence threshold - force base package if below threshold
+        const confidence = typeMatchResult.confidence !== undefined ? typeMatchResult.confidence : 0;
+        const minConfidence = apiConfig.classificationConfidenceThreshold !== undefined ? apiConfig.classificationConfidenceThreshold : 0.85;
+        if (confidence < minConfidence && matchedType && !matchedType.base) {
+            matchedType = userPackages.find(p => p.base) || ALL_PACKAGES.find(p => p.base);
+        }
 
         // Ensure matchedType has the base property by finding it in userPackages or ALL_PACKAGES
         if (matchedType && !matchedType.hasOwnProperty('base')) {
@@ -634,6 +625,11 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
             if (foundPackage) {
                 matchedType = foundPackage;
             }
+        }
+
+        // CRITICAL: Verify that matchedType is actually in userPackages - if not, fall back to base package
+        if (matchedType && !userPackages.find(p => p.name === matchedType.name)) {
+            matchedType = userPackages.find(p => p.base); // getUserPackages() always includes base package, so this should always find it
         }
 
         const packageName = matchedType.name;
@@ -644,23 +640,23 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
         // ============================================================================
         let intentGoalsResult;
 
-        // Check if this is the base (generic) package - use explicit check
-        const isBasePackage = matchedType && (matchedType.base === true || matchedType.name === 'generic');
+        // Check if this is the base package - use base property
+        const isBasePackage = matchedType && matchedType.base === true;
 
-        if (isBasePackage) {          // if package is base package - Generic
-            // Type not available in user's packages - use generic intent logic
-            // Intent is defaulted to generic.intent, goals are determined based on generic intent
+        if (isBasePackage) {          // if package is base package
+            // Type not available in user's packages - use base package intent logic
+            // Intent is defaulted to base package intent, goals are determined based on base package intent
             const genericIntent = matchedType.intent;
 
-            const genericGoalsPrompt = `You are an expert email classifier. The intent has ALREADY been determined as a generic professional intent. Your task is ONLY to determine response goals based on this generic intent.
+            const genericGoalsPrompt = `You are an expert email classifier. The intent has ALREADY been determined as a generic professional intent. Your task is to determine appropriate response goals that are contextually relevant to the email while staying within generic professional boundaries.
 
 The generic intent is: "${genericIntent}"
 
-CRITICAL: Do NOT analyze the email content to determine or infer any intent. The intent is already provided above. Your job is ONLY to determine appropriate response goals that address this generic intent.
+CRITICAL: Do NOT analyze the email content to determine or infer any intent. The intent is already provided above as generic. However, you SHOULD use the email content to understand the context and determine contextually appropriate response goals.
 
 Return a JSON object with:
 {
-  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. These goals MUST be based on and directly address the generic intent provided above. Each goal should be a specific action the recipient should take to respond to that generic intent. Do NOT infer specific intent from the email - use only the generic intent provided.
+  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. These goals should be contextually relevant to the email content while remaining generic professional responses. Prioritize positive, constructive, and engaging response goals (e.g., "Express interest", "Request more information", "Schedule a discussion") over negative or defensive ones (e.g., "Politely decline", "Reject the offer"). The first goal should be the most positive and constructive response option.
   "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
   "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
   "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
@@ -668,15 +664,16 @@ Return a JSON object with:
   "key_topics": array of strings (max 5, based on the email content)
 }
 
-Email content (ONLY for extracting recipient_name, recipient_company, and key_topics - DO NOT use it to determine intent or goals):
+Email content (use this to understand context for determining appropriate goals):
 ${emailBeingRepliedTo}
 
 ${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}
 
 CRITICAL INSTRUCTIONS:
 - The intent is ALREADY determined as: "${genericIntent}" - do NOT analyze the email to determine intent
-- Use ONLY the generic intent provided above to determine goals - do NOT infer specific intent from email content
-- Goals should be generic professional response goals that address the generic intent, not specific to the email content
+- Use the email content to understand the context and determine contextually appropriate goals
+- Prioritize positive, constructive response goals (express interest, request information, engage positively) as the first/recommended goal
+- Goals should be generic professional responses but contextually relevant to what the sender is offering/asking
 - Only use the email content to extract recipient_name, recipient_company, and key_topics
 - Do NOT include an "intent" field in your JSON response - the intent is already determined
 - Return ONLY valid JSON, no other text.`;
@@ -733,6 +730,44 @@ CRITICAL INSTRUCTIONS:
                     recipient_company: null,
                     key_topics: []
                 };
+            }
+
+            // ============================================================================
+            // LIMIT BASE PACKAGE TO 1 GOAL (FREE PLAN TEASER) - FOR REPLIES
+            // ============================================================================
+            // Limit base package to only 1 goal/tab (first tab - free plan teaser)
+            if (intentGoalsResult.response_goals && intentGoalsResult.response_goals.length > 0) {
+                // Keep only the first (recommended) goal
+                const firstGoal = intentGoalsResult.response_goals[0];
+                intentGoalsResult.response_goals = [firstGoal];
+                // Keep the original goal title (first tab already has "Recommended" mark in UI)
+                if (intentGoalsResult.goal_titles && intentGoalsResult.goal_titles[firstGoal]) {
+                    intentGoalsResult.goal_titles = {
+                        [firstGoal]: intentGoalsResult.goal_titles[firstGoal]
+                    };
+                } else {
+                    // Generate a simple title if not present
+                    intentGoalsResult.goal_titles = {
+                        [firstGoal]: firstGoal.split(' ').slice(0, 3).join(' ')
+                    };
+                }
+                // Keep only variants for the first goal
+                if (intentGoalsResult.variant_sets && intentGoalsResult.variant_sets[firstGoal]) {
+                    const variants = intentGoalsResult.variant_sets[firstGoal];
+                    // Ensure we have the expected number of variants
+                    if (variants.length < numVariants) {
+                        // Pad with fallback variants if needed
+                        const fallbackVariants = ['Professional', 'Friendly', 'Concise', 'Warm', 'Direct', 'Polite'];
+                        const needed = numVariants - variants.length;
+                        const additional = fallbackVariants.filter(v => !variants.includes(v)).slice(0, needed);
+                        variants.push(...additional);
+                    }
+                    // Limit to numVariants if more than expected
+                    intentGoalsResult.variant_sets = {
+                        [firstGoal]: variants.slice(0, numVariants)
+                    };
+                }
+                // If variant_sets[firstGoal] doesn't exist, it will be handled by the defaultVariants logic later
             }
         } else {
             // Type is available - use normal intent/goals determination from email
@@ -814,8 +849,8 @@ Analyze the conversation history to determine:
 
 Return ONLY a JSON object with:
 {
-  "tone_needed": string (the single most appropriate tone for the reply based on the conversation dynamic),
-  "tone_sets": Object with keys matching these goals: ${JSON.stringify(intentGoalsResult.response_goals)}, each containing array of 3-4 suggested tone strings ranked by appropriateness for the relationship
+  "tone_needed": string (the single most appropriate tone for the reply - must be a SHORT tone name, 1-2 words max, NOT a full sentence),
+  "tone_sets": Object with keys matching these goals: ${JSON.stringify(intentGoalsResult.response_goals)}, each containing array of 3-4 SHORT tone names (1-2 words max) ranked by appropriateness for the relationship. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
 }
 
 Return ONLY valid JSON, no other text.`;
@@ -851,6 +886,46 @@ ${previousThreadHistory ? `=== FULL THREAD HISTORY (for tone/dynamic analysis) =
                 toneContent = toneContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
             }
             toneResult = JSON.parse(toneContent);
+
+            // Clean and validate tone values - they should be short tone names, not full email text
+            const cleanToneValue = (tone) => {
+                if (!tone || typeof tone !== 'string') return 'professional';
+                const trimmed = tone.trim();
+
+                // If tone is clearly email content (too long), extract first meaningful word
+                if (trimmed.length > 50) {
+                    // Likely email content - extract first word and capitalize properly
+                    const firstWord = trimmed.split(/\s+/)[0].toLowerCase();
+                    // Capitalize first letter
+                    return firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
+                }
+
+                // For normal tones, limit to 2 words max and preserve capitalization
+                const words = trimmed.split(/\s+/).slice(0, 2);
+                const cleaned = words.join(' ');
+
+                // Capitalize first letter of each word for proper display
+                const capitalized = cleaned.split(' ').map(word =>
+                    word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+                ).join(' ');
+
+                // If result is empty or still too long, fallback to professional
+                return capitalized && capitalized.length <= 30 ? capitalized : 'Professional';
+            };
+
+            // Clean tone_needed
+            if (toneResult.tone_needed) {
+                toneResult.tone_needed = cleanToneValue(toneResult.tone_needed);
+            }
+
+            // Clean all tone_sets values
+            if (toneResult.tone_sets && typeof toneResult.tone_sets === 'object') {
+                Object.keys(toneResult.tone_sets).forEach(goal => {
+                    if (Array.isArray(toneResult.tone_sets[goal])) {
+                        toneResult.tone_sets[goal] = toneResult.tone_sets[goal].map(cleanToneValue).filter((t, i, arr) => arr.indexOf(t) === i); // Remove duplicates
+                    }
+                });
+            }
         } catch (toneError) {
             console.error('Tone determination error:', toneError);
             // Fallback with professional tone
@@ -1031,7 +1106,7 @@ ${previousThreadHistory ? `=== FULL THREAD HISTORY (for tone/dynamic analysis) =
             const classification = JSON.parse(fixedContent);
 
             // Extract and validate new structure
-            const response_goals = Array.isArray(classification.response_goals) && classification.response_goals.length > 0
+            let response_goals = Array.isArray(classification.response_goals) && classification.response_goals.length > 0
                 ? classification.response_goals
                 : ['respond appropriately'];
 
@@ -1039,13 +1114,31 @@ ${previousThreadHistory ? `=== FULL THREAD HISTORY (for tone/dynamic analysis) =
                 ? classification.tone_sets
                 : {};
 
-            const variant_sets = classification.variant_sets && typeof classification.variant_sets === 'object'
+            let variant_sets = classification.variant_sets && typeof classification.variant_sets === 'object'
                 ? classification.variant_sets
                 : {};
 
-            const goal_titles = classification.goal_titles && typeof classification.goal_titles === 'object'
+            let goal_titles = classification.goal_titles && typeof classification.goal_titles === 'object'
                 ? classification.goal_titles
                 : {};
+
+            // Check if this is base package and limit to 1 goal if needed
+            const basePackageName = getBasePackageName();
+            const isGenericInClassification = classification.type === basePackageName || (matchedType && matchedType.base === true);
+            if (isGenericInClassification && response_goals.length > 1) {
+                const firstGoal = response_goals[0];
+                response_goals = [firstGoal]; // Keep only first goal
+                // Limit goal_titles and variant_sets to first goal only
+                if (goal_titles[firstGoal]) {
+                    goal_titles = { [firstGoal]: goal_titles[firstGoal] };
+                } else {
+                    goal_titles = { [firstGoal]: firstGoal.split(' ').slice(0, 3).join(' ') };
+                }
+                if (variant_sets[firstGoal]) {
+                    variant_sets = { [firstGoal]: variant_sets[firstGoal] };
+                }
+                // If variant_sets[firstGoal] doesn't exist, it will be handled by the defaultVariants logic later (lines 1145-1156)
+            }
 
             // Helper function to generate short title from goal text
             const generateShortTitle = (goal) => {
@@ -1084,7 +1177,7 @@ ${previousThreadHistory ? `=== FULL THREAD HISTORY (for tone/dynamic analysis) =
                 : (classification.tone_needed || 'professional');
 
             return {
-                type: classification.type || packageName || 'generic',
+                type: classification.type || packageName || getBasePackageName(),
                 intent: classification.intent || 'general inquiry',
                 response_goals: response_goals,
                 goal_titles: goal_titles,
@@ -1180,7 +1273,7 @@ ${previousThreadHistory ? `=== FULL THREAD HISTORY (for tone/dynamic analysis) =
                         : (classification.tone_needed || 'professional');
 
                     return {
-                        type: classification.type || packageName || 'generic',
+                        type: classification.type || packageName || getBasePackageName(),
                         intent: classification.intent || 'general inquiry',
                         response_goals: response_goals,
                         goal_titles: goal_titles,
@@ -1273,7 +1366,7 @@ const getRichContext = () => {
         // Thread messages (reverse chronological → oldest first)
         const messages = Array.from(document.querySelectorAll('div[role="listitem"] div[dir="ltr"]'))
             .map(div => div.innerText.trim())
-            .filter(text => text && !text.includes('Generate Response') && !text.includes('Generate') && !text.includes('Respond'))
+            .filter(text => text && !text.includes('Generate Response') && !text.includes('xReplAI') && !text.includes('Respond'))
             .reverse();
 
         thread = messages.join('\n\n---\n\n');
@@ -1293,7 +1386,7 @@ const getRichContext = () => {
         const messageBlocks = Array.from(document.querySelectorAll('.msg-s-message-list__message-body, .msg-s-event-listitem__body, .msg-s-message-listitem__message-body'));
         const messages = messageBlocks
             .map(block => block.innerText?.trim() || block.textContent?.trim() || '')
-            .filter(text => text && text.length > 0 && !text.includes('Generate') && !text.includes('Respond'))
+            .filter(text => text && text.length > 0 && !text.includes('xReplAI') && !text.includes('Respond'))
             .reverse();
         thread = messages.join('\n\n---\n\n');
 
@@ -1434,7 +1527,7 @@ const platformAdapters = {
 
             return allMessageDivs
                 .map(div => div.innerText.trim())
-                .filter(text => text && text.length > 0 && !text.includes('Generate') && !text.includes('Respond'));
+                .filter(text => text && text.length > 0 && !text.includes('xReplAI') && !text.includes('Respond'));
         },
         // Get detailed information about the SPECIFIC email being replied to
         // CRITICAL: This function extracts the email the user clicked "Reply" on, NOT the latest email in the thread
@@ -2077,7 +2170,7 @@ const platformAdapters = {
                     const text = msg.innerText?.trim() || msg.textContent?.trim() || '';
                     return text;
                 })
-                .filter(text => text && text.length > 0 && !text.includes('Generate') && !text.includes('Respond'));
+                .filter(text => text && text.length > 0 && !text.includes('xReplAI') && !text.includes('Respond'));
         },
         // Get sender name from LinkedIn message
         getSenderName: () => {
@@ -2147,9 +2240,6 @@ const createIconOnlyButton = (buttonTooltip, platform) => {
             iconImg.addEventListener('error', (e) => {
                 console.error('Failed to load raiconvector.png from:', iconUrl, e);
             });
-            iconImg.addEventListener('load', () => {
-                console.log('Successfully loaded raiconvector.png for comment button');
-            });
             generateButton.appendChild(iconImg);
         } catch (error) {
             // Handle extension context errors
@@ -2178,6 +2268,19 @@ const createIconOnlyButton = (buttonTooltip, platform) => {
 };
 
 // Create button with icon
+// Helper function to update button text while preserving icon
+const updateButtonText = (button, newText) => {
+    // Find the text node (should be the last child after the icon)
+    const textNodes = Array.from(button.childNodes).filter(node => node.nodeType === Node.TEXT_NODE);
+    if (textNodes.length > 0) {
+        // Update the last text node (the button text)
+        textNodes[textNodes.length - 1].textContent = newText;
+    } else {
+        // If no text node exists, append one
+        button.appendChild(document.createTextNode(newText));
+    }
+};
+
 const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
     const generateButton = document.createElement('button');
     generateButton.type = 'button';
@@ -2193,7 +2296,7 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
             if (platform === 'linkedin') {
                 iconImg.style.cssText = 'width: 16px !important; height: 16px !important; max-width: 16px !important; max-height: 16px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
             } else {
-                iconImg.style.cssText = 'width: 28px !important; height: 28px !important; max-width: 28px !important; max-height: 28px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
+                iconImg.style.cssText = 'width: 20px !important; height: 20px !important; max-width: 28px !important; max-height: 28px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
             }
             iconImg.addEventListener('error', () => console.error('Failed to load raicon20x20.png from:', iconImg.src));
             generateButton.appendChild(iconImg);
@@ -2212,7 +2315,7 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
         generateButton.style.cssText = 'display: inline !important; align-items: center !important; padding: 4px 12px !important; margin: 0 8px 0 4px !important; border-radius: 16px !important; background: #D3E3FD !important; color: #444746 !important; border: none !important; cursor: pointer !important; font-size: 14px !important; font-weight: 600 !important; height: 28px !important; line-height: 20px !important; min-width: auto !important;';
     } else {
         // Gmail style: original styling
-        generateButton.style.cssText = 'display: inline-flex !important; align-items: center !important; padding: 0px 12px 0px 3px !important; !important; margin: 0 1px !important; border-radius: 0px !important; background: #D3E3FD !important; color: #444746 !important; border: none !important; cursor: pointer !important; font-size: 14px !important;';
+        generateButton.style.cssText = 'display: inline-flex !important; align-items: center !important; padding: 0px 12px 0px 8px !important; !important; margin: 0 1px !important; border-radius: 0px !important; background: #D3E3FD !important; font-weight: bold !important; color: #444746 !important; border: none !important; cursor: pointer !important; font-size: 14px !important;';
     }
 
     return generateButton;
@@ -2247,10 +2350,10 @@ const injectGenerateButton = () => {
         const toolbar = sendButton.parentElement;
         if (!toolbar || toolbar.querySelector('.responseable-button')) return;
 
-        const generateButton = createButton('Generate', 'Generate AI message drafts', 'responseable-generate', platform);
+        const generateButton = createButton('xReplAI', 'Generate AI message drafts', 'responseable-generate', platform);
 
         generateButton.addEventListener('click', async () => {
-            const currentButtonText = 'Generate';
+            const currentButtonText = 'xReplAI';
             // Get context for API call using enhanced context extraction
             const richContext = getRichContext();
 
@@ -2290,7 +2393,7 @@ const injectGenerateButton = () => {
 
             // Update button text and class based on whether it's a reply
             if (isReply) {
-                generateButton.innerHTML = 'Respond';
+                updateButtonText(generateButton, 'Respond');
                 generateButton.className = 'responseable-respond responseable-button' + (platform === 'linkedin' ? ' responseable-linkedin-button' : '');
                 generateButton.setAttribute('data-tooltip', 'Generate AI response options');
             }
@@ -2337,14 +2440,257 @@ const injectGenerateButton = () => {
                 ? (actualSenderName || (adapter.getEmailBeingRepliedToSenderName ? adapter.getEmailBeingRepliedToSenderName() : (adapter.getLatestEmailSenderName ? adapter.getLatestEmailSenderName() : adapter.getSenderName()))) || recipientName
                 : null;
 
+            // Handle new email vs reply differently
+            if (!isReply) {
+                // NEW EMAIL: Extract compose window content and generate drafts
+                updateButtonText(generateButton, 'Generating...');
+                generateButton.style.opacity = '0.7';
+                generateButton.disabled = true; // Disable button during generation
+
+                // Get user packages and default role
+                const userPackages = await getUserPackages();
+                const defaultRole = await getDefaultRole();
+
+                // Extract compose window content
+                let composeBodyText = '';
+                let composeSubject = richContext.subject || '';
+                let composeRecipient = richContext.to || '';
+
+                // Get body text from compose window
+                if (platform === 'gmail') {
+                    const composeBody = adapter.findComposeInput();
+                    if (composeBody) {
+                        // Try to get text content from the compose body
+                        composeBodyText = composeBody.innerText || composeBody.textContent || '';
+                    }
+                } else if (platform === 'linkedin') {
+                    // LinkedIn compose input
+                    const composeInput = document.querySelector('.msg-form__contenteditable, .msg-form__texteditor');
+                    if (composeInput) {
+                        composeBodyText = composeInput.innerText || composeInput.textContent || '';
+                    }
+                }
+
+                // Extract recipient name from To field if available
+                let actualRecipientName = recipientName;
+                if (!actualRecipientName && composeRecipient) {
+                    const toValue = composeRecipient.split(',')[0].trim();
+                    if (toValue.includes('<')) {
+                        actualRecipientName = toValue.split('<')[0].trim();
+                    } else if (!toValue.includes('@')) {
+                        actualRecipientName = toValue;
+                    }
+                }
+
+                // Get user's account info for signature
+                let userAccountName = '';
+                let userAccountEmail = '';
+                if (platform === 'gmail') {
+                    const accountButton = document.querySelector('a[aria-label*="Google Account"], a[aria-label*="Account"], button[aria-label*="Google Account"]');
+                    if (accountButton) {
+                        const accountText = accountButton.getAttribute('aria-label') || '';
+                        const nameMatch = accountText.match(/Google Account:\s*([^(]+)/);
+                        if (nameMatch) {
+                            userAccountName = nameMatch[1].trim();
+                        }
+                    }
+                    if (!userAccountName) {
+                        const fromField = document.querySelector('span[email], div[email]');
+                        if (fromField) {
+                            const emailAttr = fromField.getAttribute('email');
+                            if (emailAttr) {
+                                userAccountEmail = emailAttr;
+                            }
+                        }
+                    }
+                    if (!userAccountName && richContext.from) {
+                        userAccountEmail = richContext.from;
+                    }
+                }
+
+                // Determine type based on typed content (if available)
+                let selectedRole = defaultRole;
+                let shouldUseGenericSingleDraft = false;
+
+                if (composeBodyText.trim().length > 0 || composeSubject.trim().length > 0) {
+                    // User has typed content - determine type from it
+                    try {
+                        await loadApiConfig();
+                        const classificationModel = apiConfig.classificationModel || apiConfig.model;
+
+                        // Build context for type determination
+                        const composeContext = `${composeSubject ? `Subject: ${composeSubject}\n` : ''}${composeRecipient ? `To: ${composeRecipient}\n` : ''}${composeBodyText ? `\nEmail content:\n${composeBodyText}` : ''}`;
+
+                        // Determine type from typed content (for NEW EMAIL drafting)
+                        // CRITICAL: This is for NEW EMAIL drafting, not reply classification
+                        // Match based on what YOU (the user) are drafting, not based on email direction
+                        const typePrompt = `You are an expert email classifier. Analyze the email content provided below and determine the most appropriate email type.
+
+CRITICAL: This is for NEW EMAIL drafting. Match based on what YOU (the user) are drafting, not based on email direction. Each package description indicates when to use it based on YOUR role.
+
+Available email types:
+${userPackages.map(p =>
+                            `${p.name}: "${p.description}" (userIntent: ${p.userIntent}, roleDescription: ${p.roleDescription}, contextSpecific: ${p.contextSpecific})`
+                        ).join('\n')}
+
+Return ONLY a valid JSON object with exactly this structure:
+{
+  "matched_type": {
+    "name": string,                 // the package name (e.g., "sales")
+    "description": string,          // full description from the package
+    "userIntent": string,           // full userIntent from the package
+    "roleDescription": string,      // full roleDescription from the package
+    "contextSpecific": string       // full contextSpecific from the package
+  },
+  "confidence": number (0.0 to 1.0), // how strong the match is
+  "reason": string                  // brief explanation
+}
+
+Email content to classify:
+${composeContext}
+
+Rules:
+- Only choose from the listed packages above.
+- Match based on what YOU (the user) are drafting in the email content
+- Use the description and userIntent to determine which package matches YOUR role
+- Return the COMPLETE matched_type object including name, description, userIntent, roleDescription, and contextSpecific from the matched package.
+- Return ONLY valid JSON, no other text.`;
+
+                        const typeMessages = [
+                            { role: 'system', content: typePrompt }
+                        ];
+
+                        const typeData = await callProxyAPI(
+                            apiConfig.provider,
+                            classificationModel,
+                            typeMessages,
+                            0.3,
+                            800
+                        );
+
+                        let typeContent = typeData.choices?.[0]?.message?.content || '{}';
+                        typeContent = typeContent.trim();
+                        if (typeContent.startsWith('```json')) {
+                            typeContent = typeContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+                        } else if (typeContent.startsWith('```')) {
+                            typeContent = typeContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                        }
+
+                        const typeResult = JSON.parse(typeContent);
+                        const matchedTypeData = typeResult.matched_type;
+                        const determinedTypeName = matchedTypeData && matchedTypeData.name ? matchedTypeData.name : (typeof typeResult.matched_type === 'string' ? typeResult.matched_type : null);
+
+                        // Check confidence threshold - force generic if below threshold
+                        const confidence = typeResult.confidence !== undefined ? typeResult.confidence : 0;
+                        const minConfidence = apiConfig.classificationConfidenceThreshold !== undefined ? apiConfig.classificationConfidenceThreshold : 0.85;
+                        const isLowConfidence = confidence < minConfidence;
+
+                        if (!determinedTypeName || isLowConfidence) {
+                            // Fallback to base package if no type determined or low confidence
+                            const basePackageName = getBasePackageName();
+                            selectedRole = basePackageName;
+                            shouldUseGenericSingleDraft = true;
+                        } else {
+                            // Check if determined type is in user's packages
+                            const determinedPackage = userPackages.find(p => p.name === determinedTypeName);
+                            if (determinedPackage) {
+                                // Type matches user package - use it
+                                // NOTE: We do NOT auto-update defaultRole here - it should only be changed by user in settings
+                                selectedRole = determinedTypeName;
+                            } else {
+                                // Type doesn't match any user package - use base package single draft
+                                const basePackageName = getBasePackageName();
+                                selectedRole = basePackageName;
+                                shouldUseGenericSingleDraft = true;
+                            }
+                        }
+                    } catch (typeError) {
+                        console.error('Error determining type from content:', typeError);
+                        // Fallback to default role
+                        selectedRole = defaultRole;
+                    }
+                }
+
+                // Generate drafts
+                try {
+                    if (shouldUseGenericSingleDraft) {
+                        // Generate single generic draft based on typed content
+                        await generateGenericSingleDraft(
+                            richContext,
+                            platform,
+                            composeSubject,
+                            composeRecipient,
+                            composeBodyText,
+                            actualRecipientName,
+                            recipientCompany,
+                            adapter,
+                            userAccountName,
+                            userAccountEmail
+                        );
+                    } else {
+                        // Use normal flow with determined/default role
+                        await generateDraftsForNewEmail(
+                            richContext,
+                            platform,
+                            selectedRole,
+                            actualRecipientName,
+                            recipientCompany,
+                            adapter,
+                            userAccountName,
+                            userAccountEmail,
+                            composeSubject,
+                            composeBodyText,
+                            composeRecipient,
+                            async (draftsText, classification) => {
+                                // Create regenerateContext for new emails so tone selector works
+                                const newEmailRegenerateContext = {
+                                    richContext: context,
+                                    sourceMessageText: '', // No source message for new emails
+                                    threadHistory: '', // No thread history for new emails
+                                    context: context,
+                                    senderName: userAccountName || '[Name]',
+                                    recipientName: actualRecipientName || '[Recipient]',
+                                    recipientCompany: recipientCompany || null,
+                                    composeSubject: composeSubject,
+                                    composeBodyText: composeBodyText,
+                                    composeRecipient: composeRecipient,
+                                    isNewEmail: true,
+                                    userAccountName: userAccountName,
+                                    userAccountEmail: userAccountEmail
+                                };
+
+                                await showDraftsOverlay(draftsText, context, platform, adapter, classification, newEmailRegenerateContext, {
+                                    isNewEmail: true,
+                                    userPackages: userPackages,
+                                    defaultRole: selectedRole,
+                                    recipientName: actualRecipientName,
+                                    recipientCompany: recipientCompany,
+                                    userAccountName: userAccountName,
+                                    userAccountEmail: userAccountEmail,
+                                    skipAutoGenerate: true
+                                });
+                            }
+                        );
+                    }
+                } catch (err) {
+                    alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
+                } finally {
+                    updateButtonText(generateButton, currentButtonText);
+                    generateButton.style.opacity = '1';
+                    generateButton.disabled = false; // Re-enable button after generation
+                }
+                return;
+            }
+
+            // REPLY: Use existing classification flow
             // Step 1: Classify email using AI
             // Pass senderName so classification can use it for recipient_name (the person you're replying to)
-            generateButton.innerHTML = 'Analyzing...';
+            updateButtonText(generateButton, 'Analyzing...');
             generateButton.style.opacity = '0.7';
 
             const classification = await classifyEmail(richContext, sourceMessageText, platform, threadHistoryText, senderName);
 
-            generateButton.innerHTML = 'Generating...';
+            updateButtonText(generateButton, 'Generating...');
 
             // Store context needed for regeneration
             // threadHistory excludes the email being replied to (for context only)
@@ -2383,26 +2729,8 @@ const injectGenerateButton = () => {
             } catch (err) {
                 alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
             } finally {
-                // Restore button
-                generateButton.innerHTML = '';
-                const runtime = getChromeRuntime();
-                if (runtime) {
-                    try {
-                        const iconImg = document.createElement('img');
-                        iconImg.src = runtime.getURL('raicon20x20.png');
-                        iconImg.alt = 'ResponseAble';
-                        // Platform-specific icon sizing
-                        if (platform === 'linkedin') {
-                            iconImg.style.cssText = 'width: 16px !important; height: 16px !important; max-width: 16px !important; max-height: 16px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
-                        } else {
-                            iconImg.style.cssText = 'width: 28px !important; height: 28px !important; max-width: 28px !important; max-height: 28 px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
-                        }
-                        generateButton.appendChild(iconImg);
-                    } catch (error) {
-                        console.error('Error loading icon in finally block:', error);
-                    }
-                }
-                generateButton.appendChild(document.createTextNode(currentButtonText));
+                // Restore button text (icon should still be there)
+                updateButtonText(generateButton, currentButtonText);
                 generateButton.style.opacity = '1';
                 // Restore platform-specific styles
                 if (platform === 'linkedin') {
@@ -2427,6 +2755,597 @@ const injectGenerateButton = () => {
 
 // Simple overlay to show drafts
 // Function to generate drafts with a specific tone
+// Generate single base package draft based on typed content (when type doesn't match user packages)
+const generateGenericSingleDraft = async (richContext, platform, subject, recipient, bodyText, recipientName, recipientCompany, adapter, userAccountName = '', userAccountEmail = '') => {
+    try {
+        await loadApiConfig();
+
+        // Get base package
+        const userPackages = await getUserPackages();
+        const genericPackage = userPackages.find(p => p.base); // getUserPackages() always includes base package
+
+        // Build context from typed content
+        const composeContext = `${subject ? `Subject: ${subject}\n` : ''}${recipient ? `To: ${recipient}\n` : ''}${bodyText ? `\nEmail content:\n${bodyText}` : ''}`;
+
+        const recipientDisplay = recipientName || '[Recipient]';
+        const recipientText = recipientName
+            ? ` to ${recipientName}${recipientCompany ? ` at ${recipientCompany}` : ''}`
+            : '';
+
+        const signatureInstructions = userAccountName
+            ? `Use "${userAccountName}" as your name in the signature.`
+            : `Use "[Name]" as placeholder for your name in the signature.`;
+
+        const numVariants = apiConfig.numVariants || 4;
+
+        const systemPrompt = platform === 'linkedin'
+            ? `You are a professional LinkedIn message writer. Generate exactly ${numVariants} complete, personalized message draft variants based on the context provided below. Each variant should have a different approach, tone, or style while addressing the same context.
+
+Context:
+${composeContext}
+
+CRITICAL INSTRUCTIONS:
+${recipientDisplay !== '[Recipient]' ? `- Address the recipient as "${recipientDisplay}"${recipientCompany ? ` from ${recipientCompany}` : ''} in your greeting.` : `- Use "[Recipient]" as placeholder for the recipient's name in your greeting.`}
+- ${signatureInstructions}
+- Use "[Company]" as placeholder for your company name if needed
+- Do NOT make up recipient names, company names, or your own name/company
+- Do NOT include signatures with made-up contact information
+- Base the drafts on the context provided above
+
+IMPORTANT FORMATTING REQUIREMENTS:
+- Generate ${numVariants} complete message drafts, each ready to send, including greeting, body text, and closing
+- Separate each draft with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
+- Do NOT include variant labels, numbers, or strategy names in the drafts
+- Start each message directly with the greeting
+- Keep each message under 150 words
+- Sound human, not robotic
+- Each variant should offer a different approach (e.g., more formal, more casual, more concise, more detailed, etc.)
+
+Example format:
+${recipientDisplay !== '[Recipient]' ? `Hi ${recipientDisplay},` : 'Hi [Recipient],'}
+
+[Message body text variant 1]
+
+Best regards,
+${userAccountName || '[Name]'}
+|||RESPONSE_VARIANT|||
+${recipientDisplay !== '[Recipient]' ? `Hi ${recipientDisplay},` : 'Hi [Recipient],'}
+
+[Message body text variant 2]
+
+Best regards,
+${userAccountName || '[Name]'}`
+
+            : `You are a professional email writer. Generate exactly ${numVariants} complete, personalized email draft variants based on the context provided below. Each variant should have a different approach, tone, or style while addressing the same context.
+
+Context:
+${composeContext}
+
+CRITICAL INSTRUCTIONS:
+${recipientDisplay !== '[Recipient]' ? `- Address the recipient as "${recipientDisplay}"${recipientCompany ? ` from ${recipientCompany}` : ''} in your greeting.` : `- Use "[Recipient]" as placeholder for the recipient's name in your greeting.`}
+- ${signatureInstructions}
+- Use "[Company]" as placeholder for your company name if needed
+- Do NOT make up recipient names, company names, or your own name/company
+- Do NOT include signatures with made-up contact information
+- Base the drafts on the context provided above
+
+IMPORTANT FORMATTING REQUIREMENTS:
+- Generate ${numVariants} complete email drafts, each ready to send, including greeting, body text, and closing
+- Separate each draft with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
+- Do NOT include variant labels, numbers, or strategy names in the drafts
+- Start each email directly with the greeting
+- Keep each email under 150 words
+- Sound human, not robotic
+- Each variant should offer a different approach (e.g., more formal, more casual, more concise, more detailed, etc.)
+
+Example format:
+${recipientDisplay !== '[Recipient]' ? `Dear ${recipientDisplay},` : 'Dear [Recipient],'}
+
+[Email body text variant 1]
+
+Best regards,
+${userAccountName || '[Name]'}
+|||RESPONSE_VARIANT|||
+${recipientDisplay !== '[Recipient]' ? `Dear ${recipientDisplay},` : 'Dear [Recipient],'}
+
+[Email body text variant 2]
+
+Best regards,
+${userAccountName || '[Name]'}`;
+
+        const messages = [
+            {
+                role: 'system',
+                content: systemPrompt
+            },
+            {
+                role: 'user',
+                content: `Generate ${numVariants} professional ${platform === 'linkedin' ? 'LinkedIn message' : 'email'} draft variants${recipientName ? ` for ${recipientName}${recipientCompany ? ` at ${recipientCompany}` : ''}` : ' for [Recipient]'} based on the context provided.${!recipientName ? ' Use [Recipient] as placeholder for the recipient name.' : ''}`
+            }
+        ];
+
+        const data = await callProxyAPI(
+            apiConfig.provider,
+            apiConfig.model,
+            messages,
+            0.8,
+            800 * numVariants // Increase tokens for multiple variants
+        );
+
+        if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+            throw new Error(`Invalid response format from ${apiConfig.provider} API`);
+        }
+
+        if (!data.choices[0].message || !data.choices[0].message.content) {
+            throw new Error(`No content in response from ${apiConfig.provider} API`);
+        }
+
+        const draftText = data.choices[0].message.content.trim();
+
+        // Parse drafts - split by fixed separator
+        let draftBlocks = [];
+
+        if (draftText.includes(RESPONSE_VARIANT_SEPARATOR)) {
+            draftBlocks = draftText.split(RESPONSE_VARIANT_SEPARATOR)
+                .map(block => block.trim())
+                .filter(block => block.length > 10);
+        } else {
+            // Single draft fallback
+            draftBlocks = [draftText.trim()];
+        }
+
+        // Ensure we have the expected number of variants
+        const expectedNumVariants = apiConfig.numVariants || 4;
+        if (draftBlocks.length < expectedNumVariants) {
+            // Pad with the last draft if needed (shouldn't happen, but safety)
+            while (draftBlocks.length < expectedNumVariants && draftBlocks.length > 0) {
+                draftBlocks.push(draftBlocks[draftBlocks.length - 1]);
+            }
+        } else if (draftBlocks.length > expectedNumVariants) {
+            // Limit to expected number
+            draftBlocks = draftBlocks.slice(0, expectedNumVariants);
+        }
+
+        // Create variant labels
+        const defaultVariants = [
+            'Friendly response',
+            'Insightful response',
+            'Polite response',
+            'Professional neutral response',
+            'Concise response',
+            'Brief response',
+            'Detailed response'
+        ];
+        const variantLabels = defaultVariants.slice(0, expectedNumVariants);
+
+        // Determine tone options for base package (similar to other packages)
+        // Use default tones for base package
+        const defaultTones = ['Professional', 'Friendly', 'Warm', 'Casual', 'Formal', 'Polite', 'Concise'];
+        const goal = 'Generate appropriate draft';
+
+        // Try to determine tones based on context, but fallback to defaults
+        let toneResult = {
+            tone_needed: 'Professional',
+            tone_sets: { [goal]: defaultTones.slice(0, 4) } // Use first 4 default tones
+        };
+
+        // If we have typed content, try to determine more appropriate tones
+        if (composeContext && composeContext.trim().length > 10) {
+            try {
+                await loadApiConfig();
+                const classificationModel = apiConfig.classificationModel || apiConfig.model;
+
+                const tonePrompt = `You are an expert at determining appropriate email tone. Based on the context provided below, determine the optimal tone options for a new email.
+
+Context:
+${composeContext}
+
+Return ONLY a JSON object with:
+{
+  "tone_needed": string (the single most appropriate default tone for this new email - must be a SHORT tone name, 1-2 words max, NOT a full sentence),
+  "tone_sets": Object with key "Generate appropriate draft", containing array of 3-4 SHORT tone names (1-2 words max) ranked by appropriateness. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
+}
+
+Return ONLY valid JSON, no other text.`;
+
+                const toneMessages = [
+                    {
+                        role: 'system',
+                        content: tonePrompt
+                    }
+                ];
+
+                const toneData = await callProxyAPI(
+                    apiConfig.provider,
+                    classificationModel,
+                    toneMessages,
+                    0.3,
+                    800
+                );
+                let toneContent = toneData.choices?.[0]?.message?.content || '{}';
+                toneContent = toneContent.trim();
+                if (toneContent.startsWith('```json')) {
+                    toneContent = toneContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+                } else if (toneContent.startsWith('```')) {
+                    toneContent = toneContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                }
+                const parsedToneResult = JSON.parse(toneContent);
+
+                // Clean and validate tone values
+                const cleanToneValue = (tone) => {
+                    if (!tone || typeof tone !== 'string') return 'Professional';
+                    const trimmed = tone.trim();
+                    if (trimmed.length > 50) {
+                        const firstWord = trimmed.split(/\s+/)[0].toLowerCase();
+                        return firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
+                    }
+                    const words = trimmed.split(/\s+/).slice(0, 2);
+                    const cleaned = words.join(' ');
+                    const capitalized = cleaned.split(' ').map(word =>
+                        word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+                    ).join(' ');
+                    return capitalized && capitalized.length <= 30 ? capitalized : 'Professional';
+                };
+
+                if (parsedToneResult.tone_needed) {
+                    toneResult.tone_needed = cleanToneValue(parsedToneResult.tone_needed);
+                }
+
+                if (parsedToneResult.tone_sets && parsedToneResult.tone_sets[goal]) {
+                    toneResult.tone_sets[goal] = parsedToneResult.tone_sets[goal].map(cleanToneValue).filter((t, i, arr) => arr.indexOf(t) === i);
+                    // Ensure we have at least 2 tones for dropdown to show
+                    if (toneResult.tone_sets[goal].length < 2) {
+                        toneResult.tone_sets[goal] = defaultTones.slice(0, 4);
+                    }
+                } else {
+                    toneResult.tone_sets[goal] = defaultTones.slice(0, 4);
+                }
+            } catch (toneError) {
+                console.error('Tone determination error for generic draft:', toneError);
+                // Use defaults
+                toneResult.tone_sets[goal] = defaultTones.slice(0, 4);
+            }
+        }
+
+        // Create classification for display (single goal, no tabs, but multiple variants)
+        const classification = {
+            type: genericPackage.name, // Use actual package name, not hardcoded 'generic'
+            intent: genericPackage.intent,
+            response_goals: [goal],
+            goal_titles: { [goal]: 'Draft' },
+            variant_sets: { [goal]: variantLabels },
+            tone_needed: toneResult.tone_needed,
+            tone_sets: toneResult.tone_sets,
+            recipient_name: recipientName || null,
+            recipient_company: recipientCompany || null,
+            key_topics: [],
+            isNewEmail: true,
+            isGenericSingleDraft: false // Changed to false since we now have multiple variants
+        };
+
+        // Join drafts with separator for showDraftsOverlay
+        const draftsText = draftBlocks.join(RESPONSE_VARIANT_SEPARATOR);
+
+        // Create regenerateContext for generic new emails so tone selector works
+        const newEmailRegenerateContext = {
+            richContext: richContext,
+            sourceMessageText: '', // No source message for new emails
+            threadHistory: '', // No thread history for new emails
+            context: richContext,
+            senderName: userAccountName || '[Name]',
+            recipientName: recipientName || '[Recipient]',
+            recipientCompany: recipientCompany || null,
+            composeSubject: subject || '',
+            composeBodyText: bodyText || '',
+            composeRecipient: recipient || '',
+            isNewEmail: true,
+            userAccountName: userAccountName,
+            userAccountEmail: userAccountEmail
+        };
+
+        // Show overlay with multiple draft variants
+        await showDraftsOverlay(draftsText, richContext, platform, adapter, classification, newEmailRegenerateContext, {
+            isNewEmail: true,
+            userPackages: userPackages,
+            defaultRole: genericPackage.name, // Use actual package name
+            recipientName: recipientName,
+            recipientCompany: recipientCompany,
+            userAccountName: userAccountName,
+            userAccountEmail: userAccountEmail,
+            skipAutoGenerate: true
+        });
+    } catch (error) {
+        console.error('Error generating generic single draft:', error);
+        throw error;
+    }
+};
+
+// Generate drafts for new emails (mimics reply generation flow)
+const generateDraftsForNewEmail = async (richContext, platform, selectedRole, recipientName, recipientCompany, adapter, userAccountName = '', userAccountEmail = '', composeSubject = '', composeBodyText = '', composeRecipient = '', onComplete) => {
+    try {
+        await loadApiConfig();
+        const numVariants = apiConfig.numVariants || 4;
+        const classificationModel = apiConfig.classificationModel || apiConfig.model;
+
+        // Get the package for the selected role
+        const userPackages = await getUserPackages();
+        let selectedPackage = userPackages.find(p => p.name === selectedRole);
+
+        // Fallback to base package if selected role not found
+        if (!selectedPackage) {
+            selectedPackage = userPackages.find(p => p.base); // getUserPackages() always includes base package
+        }
+
+        if (!selectedPackage.userIntent) {
+            throw new Error(`Selected package "${selectedRole}" does not have userIntent defined`);
+        }
+
+        // Check if this is the base package - will limit to 1 goal for free plan
+        const isGenericPackage = selectedPackage && selectedPackage.base === true;
+
+        const userIntent = selectedPackage.userIntent;
+        const roleDescription = selectedPackage.roleDescription;
+
+        // ============================================================================
+        // STEP 1: GOALS DETERMINATION BASED ON userIntent AND TYPED CONTENT (similar to intent/goals for replies)
+        // ============================================================================
+        // Build context from typed content if available
+        const typedContentContext = (composeSubject || composeBodyText || composeRecipient)
+            ? `\n\nTYPED EMAIL CONTENT (use this to inform goals and topics):
+Subject: ${composeSubject || '(not provided)'}
+To: ${composeRecipient || '(not provided)'}
+Email body: ${composeBodyText || '(not provided)'}`
+            : '';
+
+        const goalsPrompt = `You are an expert email strategist. Based on the user's intent provided below${typedContentContext ? ' and the typed email content' : ''}, determine the most appropriate goals and strategies for composing a new email.
+
+The user's intent is: "${userIntent}"${typedContentContext}
+
+Return a JSON object with:
+{
+  "response_goals": Array of up to 5 most appropriate goals for composing this new email, ranked by suitability. These goals MUST be based on and directly address the sender intent provided above${typedContentContext ? ' and the specific typed content' : ''}. Each goal should be a specific action or strategy the sender should pursue to achieve that intent.
+  "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
+  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
+  "recipient_name": string${recipientName ? ` - should be "${recipientName}"` : ' or null if not available'},
+  "recipient_company": string${recipientCompany ? ` - should be "${recipientCompany}"` : ' or null if not available'},
+  "key_topics": array of strings (max 5, potential topics to cover in the email based on the intent${typedContentContext ? ' and typed content' : ''})
+}
+
+Context:
+${recipientName ? `Recipient: ${recipientName}${recipientCompany ? ` at ${recipientCompany}` : ''}` : 'Recipient: [Recipient] (name not available)'}
+Platform: ${platform === 'linkedin' ? 'LinkedIn' : 'Email'}
+
+CRITICAL INSTRUCTIONS:
+- Use the sender intent provided above${typedContentContext ? ' AND the typed email content' : ''} to determine goals
+- Goals should be specific strategies/approaches for achieving the sender's intent${typedContentContext ? ' based on the actual content they typed' : ''}
+- Variants should represent different ways to pursue each goal
+- Key topics should reflect the actual content typed by the user
+- Return ONLY valid JSON, no other text.`;
+
+        const goalsMessages = [
+            {
+                role: 'system',
+                content: goalsPrompt
+            }
+        ];
+
+        let intentGoalsResult;
+        try {
+            const goalsData = await callProxyAPI(
+                apiConfig.provider,
+                classificationModel,
+                goalsMessages,
+                0.3,
+                1500
+            );
+            let goalsContent = goalsData.choices?.[0]?.message?.content || '{}';
+            goalsContent = goalsContent.trim();
+            if (goalsContent.startsWith('```json')) {
+                goalsContent = goalsContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+            } else if (goalsContent.startsWith('```')) {
+                goalsContent = goalsContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+            }
+            intentGoalsResult = JSON.parse(goalsContent);
+        } catch (goalsError) {
+            console.error('Goals determination error:', goalsError);
+            // Fallback with generic values
+            intentGoalsResult = {
+                response_goals: ['Introduce yourself', 'Build rapport', 'Make a request'],
+                goal_titles: {
+                    'Introduce yourself': 'Introduction',
+                    'Build rapport': 'Rapport',
+                    'Make a request': 'Request'
+                },
+                variant_sets: {
+                    'Introduce yourself': ['Professional', 'Warm', 'Concise', 'Value-focused'],
+                    'Build rapport': ['Friendly', 'Professional', 'Casual', 'Engaging'],
+                    'Make a request': ['Direct', 'Polite', 'Value-first', 'Relationship-based']
+                },
+                recipient_name: recipientName || null,
+                recipient_company: recipientCompany || null,
+                key_topics: []
+            };
+        }
+
+        // ============================================================================
+        // LIMIT BASE PACKAGE TO 1 GOAL (FREE PLAN TEASER)
+        // ============================================================================
+        // Limit base package to only 1 goal/tab (first tab - free plan teaser)
+        if (isGenericPackage && intentGoalsResult.response_goals && intentGoalsResult.response_goals.length > 0) {
+            // Keep only the first (recommended) goal
+            const firstGoal = intentGoalsResult.response_goals[0];
+            intentGoalsResult.response_goals = [firstGoal];
+            // Keep the original goal title (first tab already has "Recommended" mark in UI)
+            if (intentGoalsResult.goal_titles && intentGoalsResult.goal_titles[firstGoal]) {
+                intentGoalsResult.goal_titles = {
+                    [firstGoal]: intentGoalsResult.goal_titles[firstGoal]
+                };
+            } else {
+                // Generate a simple title if not present
+                intentGoalsResult.goal_titles = {
+                    [firstGoal]: firstGoal.split(' ').slice(0, 3).join(' ')
+                };
+            }
+            // Keep only variants for the first goal
+            if (intentGoalsResult.variant_sets && intentGoalsResult.variant_sets[firstGoal]) {
+                const variants = intentGoalsResult.variant_sets[firstGoal];
+                // Ensure we have the expected number of variants
+                if (variants.length < numVariants) {
+                    // Pad with fallback variants if needed
+                    const fallbackVariants = ['Professional', 'Friendly', 'Concise', 'Warm', 'Direct', 'Polite'];
+                    const needed = numVariants - variants.length;
+                    const additional = fallbackVariants.filter(v => !variants.includes(v)).slice(0, needed);
+                    variants.push(...additional);
+                }
+                // Limit to numVariants if more than expected
+                intentGoalsResult.variant_sets = {
+                    [firstGoal]: variants.slice(0, numVariants)
+                };
+            }
+            // If variant_sets[firstGoal] doesn't exist, it will be handled by the defaultVariants logic in showDraftsOverlay
+        }
+
+        // ============================================================================
+        // STEP 2: TONE DETERMINATION (simpler for new emails)
+        // ============================================================================
+        const tonePrompt = `You are an expert at determining appropriate email tone. Based on the user's intent and goals, determine the optimal tone options for a new email.
+
+The user's intent is: "${userIntent}"
+The email goals are: ${JSON.stringify(intentGoalsResult.response_goals)}
+
+Return ONLY a JSON object with:
+{
+  "tone_needed": string (the single most appropriate default tone for this new email - must be a SHORT tone name, 1-2 words max, NOT a full sentence),
+  "tone_sets": Object with keys matching these goals: ${JSON.stringify(intentGoalsResult.response_goals)}, each containing array of 3-4 SHORT tone names (1-2 words max) ranked by appropriateness. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
+}
+
+Return ONLY valid JSON, no other text.`;
+
+        const toneMessages = [
+            {
+                role: 'system',
+                content: tonePrompt
+            }
+        ];
+
+        let toneResult;
+        try {
+            const toneData = await callProxyAPI(
+                apiConfig.provider,
+                classificationModel,
+                toneMessages,
+                0.3,
+                800
+            );
+            let toneContent = toneData.choices?.[0]?.message?.content || '{}';
+            toneContent = toneContent.trim();
+            if (toneContent.startsWith('```json')) {
+                toneContent = toneContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+            } else if (toneContent.startsWith('```')) {
+                toneContent = toneContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+            }
+            toneResult = JSON.parse(toneContent);
+
+            // Clean and validate tone values - they should be short tone names, not full email text
+            const cleanToneValue = (tone) => {
+                if (!tone || typeof tone !== 'string') return 'professional';
+                const trimmed = tone.trim();
+
+                // If tone is clearly email content (too long), extract first meaningful word
+                if (trimmed.length > 50) {
+                    // Likely email content - extract first word and capitalize properly
+                    const firstWord = trimmed.split(/\s+/)[0].toLowerCase();
+                    // Capitalize first letter
+                    return firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
+                }
+
+                // For normal tones, limit to 2 words max and preserve capitalization
+                const words = trimmed.split(/\s+/).slice(0, 2);
+                const cleaned = words.join(' ');
+
+                // Capitalize first letter of each word for proper display
+                const capitalized = cleaned.split(' ').map(word =>
+                    word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+                ).join(' ');
+
+                // If result is empty or still too long, fallback to professional
+                return capitalized && capitalized.length <= 30 ? capitalized : 'Professional';
+            };
+
+            // Clean tone_needed
+            if (toneResult.tone_needed) {
+                toneResult.tone_needed = cleanToneValue(toneResult.tone_needed);
+            }
+
+            // Clean all tone_sets values
+            if (toneResult.tone_sets && typeof toneResult.tone_sets === 'object') {
+                Object.keys(toneResult.tone_sets).forEach(goal => {
+                    if (Array.isArray(toneResult.tone_sets[goal])) {
+                        toneResult.tone_sets[goal] = toneResult.tone_sets[goal].map(cleanToneValue).filter((t, i, arr) => arr.indexOf(t) === i); // Remove duplicates
+                    }
+                });
+            }
+        } catch (toneError) {
+            console.error('Tone determination error:', toneError);
+            // Fallback
+            toneResult = {
+                tone_needed: 'professional',
+                tone_sets: {}
+            };
+            intentGoalsResult.response_goals.forEach(goal => {
+                toneResult.tone_sets[goal] = ['professional', 'friendly', 'warm'];
+            });
+        }
+
+        // ============================================================================
+        // STEP 3: BUILD CLASSIFICATION OBJECT (similar to reply flow)
+        // ============================================================================
+        const classification = {
+            type: selectedRole,
+            intent: userIntent,
+            response_goals: intentGoalsResult.response_goals || [],
+            goal_titles: intentGoalsResult.goal_titles || {},
+            variant_sets: intentGoalsResult.variant_sets || {},
+            tone_needed: toneResult.tone_needed || 'professional',
+            tone_sets: toneResult.tone_sets || {},
+            recipient_name: intentGoalsResult.recipient_name || recipientName || null,
+            recipient_company: intentGoalsResult.recipient_company || recipientCompany || null,
+            key_topics: intentGoalsResult.key_topics || [],
+            isNewEmail: true
+        };
+
+        // ============================================================================
+        // STEP 4: GENERATE DRAFTS WITH TONE (same as reply flow)
+        // ============================================================================
+        // Store typed content in classification for use in draft generation
+        classification.composeSubject = composeSubject;
+        classification.composeBodyText = composeBodyText;
+        classification.composeRecipient = composeRecipient;
+
+        await generateDraftsWithTone(
+            richContext,
+            '', // No source message for new emails
+            platform,
+            classification,
+            classification.tone_needed,
+            userAccountName || '[Name]',
+            recipientName || '[Recipient]',
+            recipientCompany || null,
+            adapter,
+            async (draftsText) => {
+                // Pass classification along with draftsText to onComplete
+                if (onComplete) {
+                    await onComplete(draftsText, classification);
+                }
+            },
+            null // No regenerateContext for new emails
+        );
+    } catch (error) {
+        console.error('Error generating drafts for new email:', error);
+        throw error;
+    }
+};
+
 const generateDraftsWithTone = async (richContext, sourceMessageText, platform, classification, selectedTone, senderName, recipientName, recipientCompany, adapter, onComplete, regenerateContext = null) => {
     try {
         await loadApiConfig();
@@ -2475,7 +3394,8 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
                 ? classification.key_topics.join(", ")
                 : "";
             const intentText = classification.intent ? ` The sender's intent: ${classification.intent}.` : "";
-            const goalText = currentGoal ? ` Your response goal: ${currentGoal}.` : "";
+            const goalText = currentGoal ? ` Your email goal: ${currentGoal}.` : "";
+            const isNewEmail = classification.isNewEmail === true;
 
             // Build style matching instructions from writing_style profile
             let styleInstructions = '';
@@ -2500,7 +3420,62 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
 Write in a way that sounds like YOU wrote it, matching your typical communication style.`;
             }
 
-            return `You are ${roleDescription}. Generate exactly ${variantCount} complete, personalized reply options based on the source email provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"}${classification.recipient_company ? ` at ${classification.recipient_company}` : ""}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""} ${contextSpecific}${styleInstructions}
+            if (isNewEmail) {
+                // New email prompt
+                const recipientDisplay = classification.recipient_name && classification.recipient_name !== '[Recipient]'
+                    ? classification.recipient_name
+                    : '[Recipient]';
+                const recipientCompanyText = classification.recipient_company
+                    ? ` at ${classification.recipient_company}`
+                    : '';
+
+                // Include typed content if available
+                const typedContentSection = (classification.composeSubject || classification.composeBodyText || classification.composeRecipient)
+                    ? `\n\nTYPED EMAIL CONTENT (use this as the basis for your drafts):
+Subject: ${classification.composeSubject || '(not provided)'}
+To: ${classification.composeRecipient || '(not provided)'}
+Email body: ${classification.composeBodyText || '(not provided)'}
+
+CRITICAL: The drafts MUST be based on and incorporate the typed content above. Use the typed content as the foundation for your email drafts, expanding and refining it according to the variant strategies.`
+                    : '';
+
+                return `You are ${roleDescription}. Generate exactly ${variantCount} complete, personalized new email drafts. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Address this email to ${recipientDisplay}${recipientCompanyText}.${keyTopicsText ? ` Key topics to consider: ${keyTopicsText}.` : ""} ${contextSpecific}${styleInstructions}${typedContentSection}
+
+CRITICAL INSTRUCTIONS FOR NEW EMAILS:
+${recipientDisplay !== '[Recipient]' ? `- Address the recipient as "${recipientDisplay}"${recipientCompanyText ? ` from ${classification.recipient_company}` : ''} in your greeting.` : `- Use "[Recipient]" as placeholder for the recipient's name in your greeting (e.g., "Hi [Recipient]," or "Dear [Recipient],").`}
+- Do NOT make up recipient names, company names, or your own name/company
+- Do NOT include signatures with made-up contact information
+- Use "[Name]" as placeholder for your name if not available
+- Use "[Company]" as placeholder for your company name if needed
+${typedContentSection ? '- Base your drafts on the typed content provided above, expanding and refining it according to each variant strategy' : ''}
+
+IMPORTANT FORMATTING REQUIREMENTS:
+- Each variant should be a complete email ready to send, including greeting, body text, and closing
+- Do NOT include variant labels, numbers, or strategy names in the response text
+- Start each email directly with the greeting
+- Separate each complete email response with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
+- Keep each email under 150 words
+- Sound human, not robotic
+
+Example format:
+${recipientDisplay !== '[Recipient]' ? `Hi ${recipientDisplay},` : 'Hi [Recipient],'}
+
+[Email body text]
+
+Best regards,
+[Name]
+
+|||RESPONSE_VARIANT|||
+
+${recipientDisplay !== '[Recipient]' ? `Hi ${recipientDisplay},` : 'Hi [Recipient],'}
+
+[Email body text]
+
+Best regards,
+[Name]`;
+            } else {
+                // Reply prompt
+                return `You are ${roleDescription}. Generate exactly ${variantCount} complete, personalized reply options based on the source email provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"}${classification.recipient_company ? ` at ${classification.recipient_company}` : ""}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""} ${contextSpecific}${styleInstructions}
 
 CRITICAL CONTEXT HANDLING:
 - You will receive TWO sections: "EMAIL BEING REPLIED TO" and optionally "PREVIOUS THREAD HISTORY"
@@ -2517,7 +3492,7 @@ IMPORTANT FORMATTING REQUIREMENTS:
 - Each variant should be a complete email ready to send, including greeting, body text, and closing
 - Do NOT include variant labels, numbers, or strategy names in the response text
 - Start each email directly with the greeting
-- Separate each complete email response with exactly "---RESPONSE---" on its own line
+- Separate each complete email response with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
 - Keep each reply under 150 words
 - Sound human, not robotic
 
@@ -2528,22 +3503,79 @@ Dear [Name],
 
 Best regards,
 
----RESPONSE---
+|||RESPONSE_VARIANT|||
 
 Dear [Name],
 
 [Email body text]
 
 Best regards,`;
+            }
         };
 
-        // Get user-selected packages from storage (defaults to ['generic'] if none selected)
+        // Get user-selected packages from storage (defaults to base package if none selected)
         const userPackages = await getUserPackages();
 
         // Get matched type from userPackages based on classification.type
-        const matchedPackage = userPackages.find(p => p.name === classification.type) || userPackages.find(p => p.base);
-        const roleDescription = matchedPackage.roleDescription;
-        const contextSpecific = matchedPackage.contextSpecific;
+        const matchedPackage = userPackages.find(p => p.name === classification.type) || userPackages.find(p => p.base); // getUserPackages() always includes base package
+
+        // Check if this is a new email
+        const isNewEmail = classification.isNewEmail === true;
+
+        // Extract userIntent early to avoid initialization issues
+        const userIntent = matchedPackage && matchedPackage.userIntent ? matchedPackage.userIntent : '';
+
+        // For new emails, derive role and context from userIntent instead of reply-focused roleDescription
+        let roleDescription, contextSpecific;
+        if (isNewEmail && matchedPackage && userIntent) {
+            // For new emails, create role description from userIntent perspective
+            // The userIntent describes what the user is doing, so we derive the role from that
+
+            // Derive role description from userIntent
+            if (classification.type === 'recruitment') {
+                // Recruitment package is FOR recruiters - userIntent is from recruiter's perspective
+                roleDescription = "a professional recruiter reaching out to potential candidates";
+                contextSpecific = `You are a recruiter reaching out to a potential candidate. ${userIntent} Focus on: introducing the opportunity clearly, highlighting what makes the role attractive, addressing candidate qualifications and fit, showcasing company values, and setting clear next steps in the hiring process. Be professional, engaging, and respectful of the candidate's time.`;
+            } else if (classification.type === 'sales') {
+                // Sales package covers both seller and buyer perspectives
+                // The userIntent and context will help determine the appropriate perspective
+                // For new emails, default to seller perspective (most common), but the AI can adapt based on goals/context
+                roleDescription = "a professional sales or procurement email writer";
+                contextSpecific = `You are engaging in a sales-related conversation. ${userIntent} If you are the seller: focus on understanding customer needs, presenting value propositions, addressing objections, building rapport, and guiding toward the next step. If you are the customer/buyer: focus on asking clear questions about products/services, negotiating terms, following up on deals, expressing needs or concerns, and moving toward a purchase decision. Adapt your approach based on your role in the conversation.`;
+            } else if (classification.type === 'jobseeker') {
+                // Jobseeker package is FOR job seekers - userIntent is from job seeker's perspective
+                roleDescription = "a job seeker reaching out to potential employers";
+                contextSpecific = `You are a job seeker reaching out to a potential employer or contact. ${userIntent} Focus on: expressing genuine interest, showcasing relevant qualifications and experience, demonstrating value you can bring, asking thoughtful questions, and requesting next steps professionally. Be confident but humble.`;
+            } else if (classification.type === 'support') {
+                // Support package covers both customer and support desk perspectives
+                roleDescription = "a professional customer support specialist or customer seeking support";
+                contextSpecific = `You are engaging in a support-related conversation. ${userIntent} If you are the customer: focus on clearly describing your issue, providing relevant details, asking questions, and following up on resolutions. If you are the support desk: focus on acknowledging the issue clearly, providing helpful solutions, setting expectations for resolution, being empathetic and professional, and ensuring customer satisfaction. Adapt your approach based on your role in the conversation.`;
+            } else if (classification.type === 'networking') {
+                roleDescription = "a professional building genuine connections";
+                contextSpecific = `You are reaching out to build a professional relationship. ${userIntent} Focus on: establishing rapport, finding mutual value, being authentic and genuine, respecting their time, and proposing clear next steps for collaboration or connection.`;
+            } else {
+                // Generic - use userIntent to create appropriate role
+                roleDescription = "a professional email writer";
+                contextSpecific = `You are composing a professional email. ${userIntent} Focus on: clear communication, appropriate tone, professional courtesy, and achieving your stated intent.`;
+            }
+        } else {
+            // For replies, use the existing roleDescription and contextSpecific
+            if (matchedPackage) {
+                roleDescription = matchedPackage.roleDescription;
+                contextSpecific = matchedPackage.contextSpecific;
+            } else {
+                // Fallback if matchedPackage is somehow undefined (shouldn't happen, but defensive)
+                const fallbackPackage = userPackages.find(p => p.base); // getUserPackages() always includes base package
+                if (fallbackPackage) {
+                    roleDescription = fallbackPackage.roleDescription;
+                    contextSpecific = fallbackPackage.contextSpecific;
+                } else {
+                    // Ultimate fallback (should never reach here)
+                    roleDescription = 'a professional email reply writer';
+                    contextSpecific = 'Respond appropriately from the recipient\'s perspective.';
+                }
+            }
+        }
 
         // Build type-specific context instructions
         const intentContext = classification.intent ? ` The sender's intent: ${classification.intent}.` : '';
@@ -2582,7 +3614,40 @@ Write in a way that sounds like YOU wrote it, matching your typical communicatio
         }
 
         const systemPrompt = platform === 'linkedin'
-            ? `You are a professional LinkedIn message writer. Generate exactly ${variantSet.length} complete, personalized reply options based on the source message provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"} at ${classification.recipient_company || "their company"}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""}${linkedinStyleInstructions}
+            ? (isNewEmail
+                ? `You are a professional LinkedIn message writer. Generate exactly ${variantSet.length} complete, personalized new message drafts. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Address this message to ${classification.recipient_name || "[Recipient]"}${classification.recipient_company ? ` at ${classification.recipient_company}` : ''}.${keyTopicsText ? ` Key topics to consider: ${keyTopicsText}.` : ""}${linkedinStyleInstructions}
+
+CRITICAL INSTRUCTIONS FOR NEW MESSAGES:
+${classification.recipient_name && classification.recipient_name !== '[Recipient]' ? `- Address the recipient as "${classification.recipient_name}"${classification.recipient_company ? ` from ${classification.recipient_company}` : ''} in your greeting.` : `- Use "[Recipient]" as placeholder for the recipient's name in your greeting.`}
+- Do NOT make up recipient names, company names, or your own name/company
+- Do NOT include signatures with made-up contact information
+- Use "[Name]" as placeholder for your name if not available
+
+IMPORTANT FORMATTING REQUIREMENTS:
+- Each variant should be a complete message ready to send, including greeting, body text, and closing
+- Do NOT include variant labels, numbers, or strategy names in the response text
+- Start each message directly with the greeting
+- Separate each complete message response with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
+- Keep it professional, concise, and under 150 words
+- Sound human, not robotic
+
+Example format:
+Hi ${classification.recipient_name || '[Recipient]'},
+
+[Message body text]
+
+Best regards,
+[Name]
+
+|||RESPONSE_VARIANT|||
+
+Hi ${classification.recipient_name || '[Recipient]'},
+
+[Message body text]
+
+Best regards,
+[Name]`
+                : `You are a professional LinkedIn message writer. Generate exactly ${variantSet.length} complete, personalized reply options based on the source message provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"} at ${classification.recipient_company || "their company"}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""}${linkedinStyleInstructions}
 
 CRITICAL CONTEXT HANDLING:
 - You will receive TWO sections: "MESSAGE BEING REPLIED TO" and optionally "PREVIOUS CONVERSATION HISTORY"
@@ -2599,7 +3664,7 @@ IMPORTANT FORMATTING REQUIREMENTS:
 - Each variant should be a complete message ready to send, including greeting, body text, and closing
 - Do NOT include variant labels, numbers, or strategy names in the response text
 - Start each message directly with the greeting
-- Separate each complete message response with exactly "---RESPONSE---" on its own line
+- Separate each complete message response with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
 - Keep it professional, concise, and under 150 words
 - Sound human, not robotic
 
@@ -2610,13 +3675,13 @@ Hi [Name],
 
 Best regards,
 
----RESPONSE---
+|||RESPONSE_VARIANT|||
 
 Hi [Name],
 
 [Message body text]
 
-Best regards,`
+Best regards,`)
             : rolePrompt;
 
         // Note: Personalization is now included in the role prompts, so we don't need to add it separately
@@ -2632,15 +3697,25 @@ Best regards,`
                 ? richContext.thread
                 : '');
 
-        // Build messages array for API call with clear separation of latest email vs thread history
-        const messages = [
-            {
-                role: 'system',
-                content: finalSystemPrompt
-            },
-            {
-                role: 'user',
-                content: `=== EMAIL BEING REPLIED TO (YOU ARE REPLYING TO THIS - IGNORE EVERYTHING ELSE BELOW) ===
+        // Build messages array for API call
+        let userContent;
+
+        if (isNewEmail) {
+            // New email - no source message or thread history
+            userContent = `Generate ${variantSet.length} professional ${platform === 'linkedin' ? 'LinkedIn message' : 'email'} drafts${classification.recipient_name && classification.recipient_name !== '[Recipient]' ? ` for ${classification.recipient_name}${classification.recipient_company ? ` at ${classification.recipient_company}` : ''}` : ' for [Recipient]'}. Each draft should use a different approach from the variant strategies provided.${!classification.recipient_name || classification.recipient_name === '[Recipient]' ? ' Use [Recipient] as placeholder for the recipient name.' : ''}
+
+${classification.recipient_name && classification.recipient_name !== '[Recipient]' ? `Recipient: ${classification.recipient_name}${classification.recipient_company ? ` (${classification.recipient_company})` : ''}` : 'Recipient: [Recipient] (name not available)'}
+
+CRITICAL - Do NOT include in your response:
+- A subject line (it's already set)
+- Your signature, name, email address, phone number, or company name (${platform === 'gmail' ? 'Gmail will automatically add your signature' : 'signatures are not needed'})
+- Made-up names, companies, or contact information
+- Generic greetings like "Hi Google" or "Hello there"${classification.recipient_name && classification.recipient_name !== '[Recipient]' ? ` - use "${classification.recipient_name}"` : ' - use [Recipient] as placeholder'}
+- Any text after the closing (no signatures, no contact info)
+- Labels like "1. Friendly response" or "2. Insightful response" - just write the actual email text`;
+        } else {
+            // Reply - include source message and thread history
+            userContent = `=== EMAIL BEING REPLIED TO (YOU ARE REPLYING TO THIS - IGNORE EVERYTHING ELSE BELOW) ===
 ${emailBeingRepliedTo}
 
 ${previousThreadHistory ? `=== PREVIOUS THREAD HISTORY (IGNORE THIS - FOR BACKGROUND CONTEXT ONLY) ===
@@ -2656,7 +3731,17 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
 - Made-up names, companies, or contact information
 - Generic greetings like "Hi Google" or "Hello there" - use the actual sender's name
 - Any text after the closing (no signatures, no contact info)
-- Labels like "1. Friendly response" or "2. Insightful response" - just write the actual email text`
+- Labels like "1. Friendly response" or "2. Insightful response" - just write the actual email text`;
+        }
+
+        const messages = [
+            {
+                role: 'system',
+                content: finalSystemPrompt
+            },
+            {
+                role: 'user',
+                content: userContent
             }
         ];
 
@@ -2698,11 +3783,14 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
     }
 };
 
-const showDraftsOverlay = async (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null) => {
+const showDraftsOverlay = async (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null, newEmailParams = null) => {
     // Remove existing overlay
     document.querySelector('.responseable-overlay')?.remove();
 
     const adapter = customAdapter || platformAdapters[platform];
+
+    // Check if this is a new email (not a reply)
+    const isNewEmail = newEmailParams && newEmailParams.isNewEmail === true;
 
     // Get selected packages for display
     const selectedPackages = await getUserPackages();
@@ -2715,7 +3803,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
         const matchedPackage = ALL_PACKAGES.find(p => p.name === classification.type);
         if (matchedPackage) {
             matchedTypeInfo = {
-                name: matchedPackage.base === true ? 'Base' : matchedPackage.name,
+                name: matchedPackage.base === true ? (matchedPackage.name.charAt(0).toUpperCase() + matchedPackage.name.slice(1)) : matchedPackage.name,
                 description: matchedPackage.description
             };
         }
@@ -2729,21 +3817,27 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     transform: translate(-50%, -50%);
     width: 80%;
     max-width: 800px;
-    max-height: 80vh;
-    overflow-y: auto;
+    max-height: 90vh;
     background: white;
     border-radius: 12px;
     box-shadow: 0 20px 50px rgba(0,0,0,0.3);
-    z-index: 10000;
+    z-index: 2147483647;
     padding: 24px;
     font-family: Google Sans,Roboto,sans-serif;
+    display: flex;
+    flex-direction: column;
   `;
 
     // Parse drafts - split by clear separator markers first
     let draftBlocks = [];
 
-    if (draftsText.includes('---RESPONSE---')) {
-        draftBlocks = draftsText.split(/---RESPONSE---/g)
+    // Check if this is a single draft (no separator) - for generic single draft case
+    // Use fixed separator - simpler and more reliable
+    if (!draftsText.includes(RESPONSE_VARIANT_SEPARATOR) && draftsText.trim().length > 0) {
+        // Single draft - use as-is
+        draftBlocks = [draftsText.trim()];
+    } else if (draftsText.includes(RESPONSE_VARIANT_SEPARATOR)) {
+        draftBlocks = draftsText.split(RESPONSE_VARIANT_SEPARATOR)
             .map(block => {
                 let cleaned = block.trim();
                 // Remove variant labels that might appear at the start (e.g., "1. Simple Agreement", "2. Enthusiastic Confirmation")
@@ -2912,40 +4006,61 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
         `;
     }).join('');
 
+    // No dropdown for new emails - using default role from settings
+    let newEmailDropdownHtml = '';
+    if (isNewEmail && newEmailParams) {
+        // Just show a message that generation will use default role
+        const basePackageName = getBasePackageName();
+        const defaultRole = newEmailParams.defaultRole || basePackageName;
+        const userPackages = newEmailParams.userPackages || selectedPackages;
+        const defaultPackage = userPackages.find(p => p.name === defaultRole) || userPackages.find(p => p.base);
+        const displayName = defaultPackage && defaultPackage.base === true ? 'Generic' : (defaultRole.charAt(0).toUpperCase() + defaultRole.slice(1));
+
+        newEmailDropdownHtml = `
+    <div style="margin-bottom: 16px; padding: 12px; background: #f8f9fa; border-radius: 8px; border: 1px solid #dadce0;">
+      <p style="font-size: 13px; color: #5f6368; margin: 0;">Using <strong>${displayName}</strong> package (default).${classification && classification.isGenericSingleDraft ? ' Generated a generic draft based on your content.' : ''}</p>
+    </div>`;
+    }
+
     overlay.innerHTML = `
-    <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> Able to Respond Better</h2>
-    ${selectedPackageNames ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : ''}
-    ${matchedTypeInfo ? `<p style="color:#5f6368; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}
-    ${classification ? `<p style="color:#5f6368; margin-top: ${matchedTypeInfo || selectedPackageNames ? '0' : '-8px'}; margin-bottom: 12px; font-size: 12px;"><strong>Intent:</strong> ${classification.intent || 'general inquiry'}${classification.key_topics && classification.key_topics.length > 0 ? ` | Topics: ${classification.key_topics.join(', ')}` : ''}</p>` : ''}
-    ${responseGoals.length > 1 ? `
-    <div style="margin-bottom: 16px; border-bottom: 1px solid #dadce0; padding-bottom: 8px;">
-      <div style="display: flex; flex-wrap: wrap; gap: 0;">
-        ${tabsHtml}
+    <div style="flex-shrink: 0;">
+      <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> Able to Respond Better</h2>
+      ${isNewEmail ? '' : (selectedPackageNames ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : '')}
+      ${newEmailDropdownHtml}
+      ${!isNewEmail && matchedTypeInfo ? `<p style="color:#5f6368; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}
+      ${classification ? `<p id="sender-intent-text" style="color:#5f6368; margin-top: ${matchedTypeInfo || selectedPackageNames ? '0' : '-8px'}; margin-bottom: 12px; font-size: 12px;"><strong>${isNewEmail ? 'Sender Intent' : 'Intent'}:</strong> ${classification.intent || 'general inquiry'}${classification.key_topics && classification.key_topics.length > 0 ? ` | Topics: ${classification.key_topics.join(', ')}` : ''}</p>` : ''}
+      ${responseGoals.length > 1 && !(classification && classification.isGenericSingleDraft) ? `
+      <div id="goals-tabs-container" style="margin-bottom: 16px; border-bottom: 1px solid #dadce0; padding-bottom: 8px;">
+        <div style="display: flex; flex-wrap: wrap; gap: 0;">
+          ${tabsHtml}
+        </div>
+        <div id="goal-description" style="margin-top: 12px; padding: 8px 12px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #5f6368; min-height: 20px;">
+          <strong>Goal:</strong> <span id="goal-description-text">${currentGoal}</span>
+        </div>
       </div>
-      <div id="goal-description" style="margin-top: 12px; padding: 8px 12px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #5f6368; min-height: 20px;">
-        <strong>Goal:</strong> <span id="goal-description-text">${currentGoal}</span>
+      ` : ''}
+      ${classification && classification.tone_sets && classification.tone_sets[currentGoal] && classification.tone_sets[currentGoal].length > 1 ? `
+      <div id="tone-selector-container" style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+        <label for="tone-selector" style="font-size: 13px; color: #5f6368; font-weight: 500;">Tone:</label>
+        <select id="tone-selector" style="padding: 6px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px; background: white; color: #202124; cursor: pointer;">
+          ${classification.tone_sets[currentGoal].map(tone => `<option value="${tone}" ${tone === currentTone ? 'selected' : ''}>${tone}</option>`).join('')}
+        </select>
+        <span id="regenerate-status" style="font-size: 12px; color: #5f6368; margin-left: 8px;"></span>
       </div>
+      ` : ''}
+      <p id="draft-instruction-text" style="color:#5f6368; margin-top: 0; display: ${draftsHtml ? 'block' : 'none'};">Click any draft to insert it</p>
     </div>
-    ` : ''}
-    ${classification && classification.tone_sets && classification.tone_sets[currentGoal] && classification.tone_sets[currentGoal].length > 1 ? `
-    <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-      <label for="tone-selector" style="font-size: 13px; color: #5f6368; font-weight: 500;">Tone:</label>
-      <select id="tone-selector" style="padding: 6px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px; background: white; color: #202124; cursor: pointer;">
-        ${classification.tone_sets[currentGoal].map(tone => `<option value="${tone}" ${tone === currentTone ? 'selected' : ''}>${tone}</option>`).join('')}
-      </select>
-      <span id="regenerate-status" style="font-size: 12px; color: #5f6368; margin-left: 8px;"></span>
-    </div>
-    ` : ''}
-    <p style="color:#5f6368; margin-top: 0;">Click any draft to insert it</p>
-    <div id="drafts-container" style="max-height: 60vh; overflow-y: auto;">
+    <div id="drafts-container" style="flex: 1; overflow-y: auto; min-height: 0; margin: 12px 0;">
       ${draftsHtml}
     </div>
     <div id="loading-indicator" style="display: none; text-align: center; padding: 20px; color: #5f6368;">
       Generating drafts...
     </div>
-    <button id="responseable-close-button" style="margin-top:20px; padding:8px 16px; background:#1a73e8; color:white; border:none; border-radius:4px; cursor:pointer;">
-      Close
-    </button>
+    <div style="flex-shrink: 0; margin-top: 16px; padding-top: 16px; border-top: 1px solid #dadce0;">
+      <button id="responseable-close-button" style="width: 100%; padding:10px 16px; background:#1a73e8; color:white; border:none; border-radius:4px; cursor:pointer; font-size: 14px; font-weight: 500;">
+        Close
+      </button>
+    </div>
   `;
 
     // Create and insert icon programmatically
@@ -2973,6 +4088,8 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     if (closeButton) {
         closeButton.addEventListener('click', () => overlay.remove());
     }
+
+    // No handler needed for new emails - generation happens when main Generate button is clicked
 
     // Tab switching logic
     if (classification && regenerateContext && responseGoals.length > 1) {
@@ -3028,6 +4145,9 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                 // Show loading
                 draftsContainer.style.display = 'none';
                 loadingIndicator.style.display = 'block';
+                // Hide instruction text during generation
+                const instructionText = overlay.querySelector('#draft-instruction-text');
+                if (instructionText) instructionText.style.display = 'none';
 
                 try {
                     // Get variant set and tone for this goal
@@ -3090,7 +4210,8 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     attachDraftClickHandlers(overlay, adapter);
 
     // Tone selector change handler - regenerate variants with new tone for current goal
-    if (classification && regenerateContext) {
+    // Works for both replies (regenerateContext) and new emails (newEmailParams)
+    if (classification && (regenerateContext || (newEmailParams && newEmailParams.isNewEmail))) {
         const toneSelector = overlay.querySelector('#tone-selector');
         const draftsContainer = overlay.querySelector('#drafts-container');
         const loadingIndicator = overlay.querySelector('#loading-indicator');
@@ -3115,6 +4236,9 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                 toneSelector.disabled = true;
                 draftsContainer.style.display = 'none';
                 loadingIndicator.style.display = 'block';
+                // Hide instruction text during regeneration
+                const instructionText = overlay.querySelector('#draft-instruction-text');
+                if (instructionText) instructionText.style.display = 'none';
 
                 try {
                     // Get variant set for current goal
@@ -3135,21 +4259,59 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                     updatedClassification._currentGoal = currentGoal;
                     updatedClassification._currentTone = newTone;
 
+                    // Get context - use regenerateContext if available, otherwise create from newEmailParams for new emails
+                    const contextToUse = regenerateContext || (newEmailParams && newEmailParams.isNewEmail ? {
+                        richContext: context,
+                        sourceMessageText: '',
+                        threadHistory: '',
+                        context: context,
+                        senderName: newEmailParams.userAccountName || '[Name]',
+                        recipientName: newEmailParams.recipientName || '[Recipient]',
+                        recipientCompany: newEmailParams.recipientCompany || null,
+                        composeSubject: classification.composeSubject || '',
+                        composeBodyText: classification.composeBodyText || '',
+                        composeRecipient: classification.composeRecipient || '',
+                        isNewEmail: true,
+                        userAccountName: newEmailParams.userAccountName,
+                        userAccountEmail: newEmailParams.userAccountEmail
+                    } : null);
+
+                    if (!contextToUse) {
+                        throw new Error('No context available for regeneration');
+                    }
+
+                    const isNewEmail = contextToUse.isNewEmail === true || classification.isNewEmail === true;
+
                     await generateDraftsWithTone(
-                        regenerateContext.richContext,
-                        regenerateContext.sourceMessageText,
+                        contextToUse.richContext,
+                        contextToUse.sourceMessageText || '',
                         platform,
                         updatedClassification,
                         newTone,
-                        regenerateContext.senderName,
-                        regenerateContext.recipientName,
-                        regenerateContext.recipientCompany,
+                        contextToUse.senderName,
+                        contextToUse.recipientName,
+                        contextToUse.recipientCompany,
                         adapter,
                         async (newDraftsText) => {
                             // Re-render the drafts with new tone
-                            await showDraftsOverlay(newDraftsText, regenerateContext.context, platform, adapter, updatedClassification, regenerateContext);
+                            if (isNewEmail) {
+                                // For new emails, pass newEmailParams
+                                await showDraftsOverlay(newDraftsText, contextToUse.context, platform, adapter, updatedClassification, contextToUse, {
+                                    isNewEmail: true,
+                                    userPackages: newEmailParams?.userPackages,
+                                    defaultRole: newEmailParams?.defaultRole,
+                                    recipientName: contextToUse.recipientName,
+                                    recipientCompany: contextToUse.recipientCompany,
+                                    userAccountName: contextToUse.userAccountName,
+                                    userAccountEmail: contextToUse.userAccountEmail,
+                                    skipAutoGenerate: true
+                                });
+                            } else {
+                                // For replies, use existing flow
+                                await showDraftsOverlay(newDraftsText, contextToUse.context, platform, adapter, updatedClassification, contextToUse);
+                            }
                         },
-                        regenerateContext  // Pass regenerateContext
+                        contextToUse  // Pass context
                     );
                 } catch (err) {
                     regenerateStatus.textContent = 'Error regenerating';
@@ -3159,6 +4321,9 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                     }, 2000);
                     draftsContainer.style.display = 'block';
                     loadingIndicator.style.display = 'none';
+                    // Show instruction text when drafts are ready
+                    const instructionText = overlay.querySelector('#draft-instruction-text');
+                    if (instructionText) instructionText.style.display = 'block';
                 } finally {
                     toneSelector.disabled = false;
                 }
@@ -3187,7 +4352,102 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
         });
     });
 
+    // Try to find the compose container and attach overlay to it
+    // This ensures the overlay closes when the compose window closes
+    let composeContainer = null;
+    if (platform === 'gmail') {
+        const composeBody = adapter.findComposeInput();
+        if (composeBody) {
+            composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') ||
+                composeBody.closest('form') ||
+                composeBody.parentElement?.parentElement?.parentElement;
+        }
+    } else if (platform === 'linkedin') {
+        const composeInput = adapter.findComposeInput();
+        if (composeInput) {
+            composeContainer = composeInput.closest('[role="dialog"], .msg-form, .msg-s-message-list__compose-container') ||
+                composeInput.closest('form');
+        }
+    }
+
+    // Always attach overlay to body to avoid stacking context issues with Gmail's compose container
+    // This ensures the overlay appears above all Gmail UI elements
     document.body.appendChild(overlay);
+
+    // Ensure overlay is positioned correctly and has maximum z-index
+    overlay.style.position = 'fixed';
+    overlay.style.top = '50%';
+    overlay.style.left = '50%';
+    overlay.style.transform = 'translate(-50%, -50%)';
+    overlay.style.zIndex = '2147483647'; // Maximum z-index to ensure it's above Gmail toolbar
+
+    // Monitor compose container removal - close overlay if compose window is closed
+    if (composeContainer) {
+        let intervalId = null;
+
+        const checkComposeClosed = () => {
+            // Check multiple conditions to detect if compose window is closed
+            const composeBody = adapter.findComposeInput();
+            const isContainerRemoved = !document.body.contains(composeContainer) || !composeContainer.isConnected;
+            const isContainerHidden = composeContainer.offsetParent === null ||
+                composeContainer.style.display === 'none' ||
+                composeContainer.style.visibility === 'hidden';
+            const isComposeBodyGone = !composeBody || !document.body.contains(composeBody);
+
+            // If any of these conditions are true, the compose window is likely closed
+            if (isContainerRemoved || (isContainerHidden && isComposeBodyGone)) {
+                overlay.remove();
+                return true;
+            }
+            return false;
+        };
+
+        // Use MutationObserver to watch for changes
+        const observer = new MutationObserver((mutations) => {
+            if (checkComposeClosed()) {
+                observer.disconnect();
+                if (intervalId) clearInterval(intervalId);
+            }
+        });
+
+        // Start observing the compose container and its parent
+        if (composeContainer.parentNode) {
+            observer.observe(composeContainer.parentNode, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['style', 'class']
+            });
+        }
+        observer.observe(composeContainer, {
+            attributes: true,
+            attributeFilter: ['style', 'class']
+        });
+
+        // Also use polling as a fallback (check every 500ms)
+        intervalId = setInterval(() => {
+            if (checkComposeClosed()) {
+                clearInterval(intervalId);
+                intervalId = null;
+            }
+        }, 500);
+
+        // Clean up when overlay is removed
+        const overlayObserver = new MutationObserver(() => {
+            if (!document.body.contains(overlay)) {
+                observer.disconnect();
+                overlayObserver.disconnect();
+                if (intervalId) {
+                    clearInterval(intervalId);
+                    intervalId = null;
+                }
+            }
+        });
+        overlayObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
 };
 
 // Shared click handler for comment buttons
@@ -3221,7 +4481,7 @@ const createCommentButtonHandler = (editor) => {
                 },
                 {
                     role: 'user',
-                    content: `LinkedIn post content:\n\n${postText}\n\n${commentContext ? `Current comment draft:\n${commentContext}\n\n` : ''}Please generate 4 complete comment response variants. Format each response as a complete comment ready to post. Separate each response with exactly "---RESPONSE---" on its own line.\n\n1. Friendly response\n---RESPONSE---\n2. Insightful response\n---RESPONSE---\n3. Professional response\n---RESPONSE---\n4. Concise response`
+                    content: `LinkedIn post content:\n\n${postText}\n\n${commentContext ? `Current comment draft:\n${commentContext}\n\n` : ''}Please generate 4 complete comment response variants. Format each response as a complete comment ready to post. Separate each response with exactly "|||RESPONSE_VARIANT|||" on its own line.\n\n1. Friendly response\n|||RESPONSE_VARIANT|||\n2. Insightful response\n|||RESPONSE_VARIANT|||\n3. Professional response\n|||RESPONSE_VARIANT|||\n4. Concise response`
                 }
             ];
 
@@ -3325,8 +4585,6 @@ const injectCommentButton = () => {
         '.feed-shared-update-v2 div[contenteditable="true"][role="textbox"]'
     );
 
-    console.log('ResponseAble: Found', commentTextEditors.length, 'comment text editors');
-
     if (commentTextEditors.length === 0) {
         return; // No comment editors found
     }
@@ -3335,11 +4593,8 @@ const injectCommentButton = () => {
         // Skip if already has our button
         const commentContainer = editor.closest('.comments-comment-box, .comment-shared-texteditor, .feed-shared-update-v2');
         if (commentContainer?.querySelector('.responseable-comment-button')) {
-            console.log('ResponseAble: Editor', index, 'already has button, skipping');
             return;
         }
-
-        console.log('ResponseAble: Processing editor', index, 'container:', !!commentContainer);
 
         // Find the container with class "display-flex justify-space-between"
         // This is the parent container that has the toolbar with emoji/image buttons
@@ -3353,7 +4608,6 @@ const injectCommentButton = () => {
                 const displayFlexChild = current.querySelector('> .display-flex:first-child');
                 if (displayFlexChild) {
                     toolbarContainer = displayFlexChild;
-                    console.log('ResponseAble: Found toolbar via justify-space-between method');
                     break;
                 }
             }
@@ -3363,7 +4617,6 @@ const injectCommentButton = () => {
         // If not found with that approach, try finding by the emoji button
         if (!toolbarContainer) {
             const emojiButton = commentContainer?.querySelector('button.comments-comment-box__emoji-picker-trigger, button[aria-label*="Emoji"]');
-            console.log('ResponseAble: Emoji button found:', !!emojiButton);
             if (emojiButton) {
                 // Find the parent div with class "display-flex" that contains both emoji and image buttons
                 let parent = emojiButton.parentElement;
@@ -3373,17 +4626,12 @@ const injectCommentButton = () => {
                         const hasImageButton = parent.querySelector('button.comments-comment-box__detour-icons, button[aria-label*="photo"], button[aria-label*="image"]');
                         if (hasImageButton) {
                             toolbarContainer = parent;
-                            console.log('ResponseAble: Found toolbar via emoji button method');
                             break;
                         }
                     }
                     parent = parent.parentElement;
                 }
             }
-        }
-
-        if (!toolbarContainer) {
-            console.log('ResponseAble: Toolbar container not found for editor', index);
         }
 
         if (toolbarContainer) {
@@ -3400,13 +4648,9 @@ const injectCommentButton = () => {
             const firstChild = toolbarContainer.firstElementChild;
             if (firstChild) {
                 toolbarContainer.insertBefore(commentButton, firstChild);
-                console.log('ResponseAble: Comment button inserted before first child');
             } else {
                 toolbarContainer.appendChild(commentButton);
-                console.log('ResponseAble: Comment button appended to toolbar');
             }
-        } else {
-            console.log('ResponseAble: Toolbar container not found for comment editor');
         }
     });
 };

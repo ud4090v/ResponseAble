@@ -12,12 +12,14 @@
     margin-right: 1px !important;
     user-select: none !important;
     height: 28px !important;
-    color: #444746;
+    /* color: #444746; */
+    color: #0a1f3d;
     padding-right: 16px !important;
     padding-left: 16px !important;
     padding-top: 4px !important;
     padding-bottom: 4px !important;
     user-select: none !important;
+    font-weight: bold !important;
     /* display: inline-flex !important;
     align-items: center !important; */
 }

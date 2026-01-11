@@ -98,3 +98,42 @@
 .SaveButton:active {
   background: #1348a0;
 }
+
+.TabsContainer {
+  display: flex;
+  border-bottom: 2px solid #dadce0;
+  margin-bottom: 30px;
+  gap: 0;
+}
+
+.Tab {
+  background: none;
+  border: none;
+  padding: 12px 24px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #5f6368;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.Tab:hover {
+  color: #1a73e8;
+  background: rgba(26, 115, 232, 0.05);
+}
+
+.TabActive {
+  color: #1a73e8;
+  border-bottom-color: #1a73e8;
+}
+
+.TabActive:hover {
+  background: none;
+}
+
+.TabContent {
+  min-height: 400px;
+}

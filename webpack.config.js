@@ -187,7 +187,7 @@ var options = {
     new CopyWebpackPlugin({
       patterns: [
         {
-          from: 'src/assets/img/ra-glow-256.png',
+          from: 'src/assets/img/xrepl256mute.png',
           to: path.join(__dirname, 'build', 'raicon.png'),
           force: true,
         },
@@ -196,7 +196,7 @@ var options = {
     new CopyWebpackPlugin({
       patterns: [
         {
-          from: 'src/assets/img/ra-glow-256.png',
+          from: 'src/assets/img/xrepl256blue.png',
           to: path.join(__dirname, 'build', 'raicon20x20.png'),
           force: true,
         },
@@ -205,8 +205,17 @@ var options = {
     new CopyWebpackPlugin({
       patterns: [
         {
-          from: 'src/assets/img/ra-glow-256-dark-border.png',
+          from: 'src/assets/img/xrepl256light.png',
           to: path.join(__dirname, 'build', 'raicon-dark-border.png'),
+          force: true,
+        },
+      ],
+    }),
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: 'src/assets/img/xrepl256light.png',
+          to: path.join(__dirname, 'build', 'xrepl-light.png'),
           force: true,
         },
       ],

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './Options.css';
+import ALL_PACKAGES_DATA from '../../config/packages.json';
 
 interface Props {
   title: string;
@@ -9,61 +10,21 @@ interface ApiConfig {
   provider: 'openai' | 'grok';
   model: string;
   numVariants: number;
+  classificationConfidenceThreshold: number;
 }
 
 interface Package {
   name: string;
+  base?: boolean;
   description: string;
   intent: string;
+  userIntent: string;
   roleDescription: string;
   contextSpecific: string;
 }
 
-// Master list of all available packages
-const ALL_PACKAGES: Package[] = [
-  {
-    name: "sales",
-    description: "emails about deals, follow-ups, objections, meetings, and closing business",
-    intent: "The sender is selling a product or service to the recipient. Consider their approach: cold outreach (initial contact), follow-up (nudge after no response), offering discount (price incentive), value proposition (highlight benefits), or closing (meeting/demo request).",
-    roleDescription: "a world-class B2B sales email writer",
-    contextSpecific: "Respond as a potential customer evaluating the offer. Consider: pricing, value proposition, fit with your needs, and next steps. Use variants that match your interest level and decision-making stage."
-  },
-  {
-    name: "recruitment",
-    description: "emails about hiring, candidates, sourcing talent, interviews, and job offers",
-    intent: "The sender is a recruiter offering a job position or opportunity to the recipient. Consider what they're offering: specific role details, interview invitation, salary range, company culture fit, or next steps in hiring process.",
-    roleDescription: "a professional candidate responding to a recruiter's job offer",
-    contextSpecific: "The sender (recruiter) is OFFERING a job position to YOU (the recipient/candidate). Respond as the candidate - express interest, ask questions about the role/company/compensation, or politely decline. Consider: role fit, career goals, compensation, company culture, and work-life balance. Do NOT respond as if you are offering them a job."
-  },
-  {
-    name: "jobseeker",
-    description: "emails about job applications, interviews, follow-ups as a candidate, and career opportunities",
-    intent: "The sender is a job seeker applying to or following up with the recipient. Consider their intent: expressing interest in a role, attaching resume, requesting interview, thanking after meeting, or seeking referrals.",
-    roleDescription: "a hiring manager or recruiter responding to a job application",
-    contextSpecific: "The sender is applying for a position. Respond as the recipient (hiring manager/recruiter). Consider: candidate qualifications, fit with role requirements, next steps in hiring process, and providing constructive feedback if declining."
-  },
-  {
-    name: "support",
-    description: "emails about customer issues, complaints, troubleshooting, and resolutions",
-    intent: "The sender is seeking help or reporting an issue to the recipient. Consider the problem: technical bug, billing inquiry, feature request, or service complaint, and urgency level.",
-    roleDescription: "an empathetic customer support specialist",
-    contextSpecific: "Address the customer's concern professionally and helpfully. Consider: urgency, impact, resolution options, escalation needs, and customer satisfaction. Provide clear next steps and timelines."
-  },
-  {
-    name: "networking",
-    description: "emails about professional connections, introductions, referrals, and collaborations",
-    intent: "The sender is building or maintaining a professional relationship with the recipient. Consider the goal: warm introduction, referral request, collaboration proposal, or staying in touch after event.",
-    roleDescription: "a professional building genuine connections",
-    contextSpecific: "Build a meaningful professional relationship. Consider: mutual value, relationship building, reciprocity, and long-term connection. Keep it professional, warm, and relationship-focused."
-  },
-  {
-    name: "generic",
-    description: "general professional emails not fitting specific categories",
-    intent: "The sender has a neutral professional intent toward the recipient. Consider basic goals like information sharing, scheduling, or simple acknowledgments without strong sales/hiring/support elements.",
-    roleDescription: "a professional email reply writer",
-    contextSpecific: "Carefully analyze the source email to understand the context, relationship, and intent. Respond appropriately from the recipient's perspective, considering the specific situation and relationship dynamics."
-  }
-];
+// Master list of all available packages - imported from shared config
+const ALL_PACKAGES: Package[] = ALL_PACKAGES_DATA as Package[];
 
 const API_PROVIDERS = {
   openai: {
@@ -79,21 +40,25 @@ const API_PROVIDERS = {
 };
 
 const Options: React.FC<Props> = ({ title }: Props) => {
+  const [activeTab, setActiveTab] = useState<string>('models');
   const [config, setConfig] = useState<ApiConfig>({
     provider: 'grok',
     model: 'grok-4-latest',
     numVariants: 4,
+    classificationConfidenceThreshold: 0.85,
   });
   const [selectedPackages, setSelectedPackages] = useState<string[]>(['generic']);
+  const [defaultRole, setDefaultRole] = useState<string>('generic');
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     // Load saved settings
-    chrome.storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'selectedPackages'], (result) => {
+    chrome.storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'classificationConfidenceThreshold', 'selectedPackages', 'defaultRole'], (result) => {
       setConfig({
         provider: (result.apiProvider as ApiConfig['provider']) || 'grok',
         model: result.apiModel || 'grok-4-latest',
         numVariants: result.numVariants || 4,
+        classificationConfidenceThreshold: result.classificationConfidenceThreshold !== undefined ? result.classificationConfidenceThreshold : 0.85,
       });
       // Load selected packages, default to ['generic'] if none selected
       if (result.selectedPackages && Array.isArray(result.selectedPackages) && result.selectedPackages.length > 0) {
@@ -101,8 +66,22 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       } else {
         setSelectedPackages(['generic']);
       }
+      // Load default role, default to 'generic' if not found
+      const loadedDefaultRole = result.defaultRole && typeof result.defaultRole === 'string' ? result.defaultRole : 'generic';
+      // Validate that loaded default role is in selected packages
+      const loadedPackages = result.selectedPackages && Array.isArray(result.selectedPackages) && result.selectedPackages.length > 0
+        ? result.selectedPackages
+        : ['generic'];
+      setDefaultRole(loadedPackages.includes(loadedDefaultRole) ? loadedDefaultRole : 'generic');
     });
   }, []);
+
+  // Auto-reset default role to generic if it's not in selected packages
+  useEffect(() => {
+    if (!selectedPackages.includes(defaultRole)) {
+      setDefaultRole('generic');
+    }
+  }, [selectedPackages, defaultRole]);
 
   const handleProviderChange = (provider: ApiConfig['provider']) => {
     const providerConfig = API_PROVIDERS[provider];
@@ -118,7 +97,14 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       if (prev.includes(packageName)) {
         // If unchecking the last package, ensure at least 'generic' is selected
         const newSelection = prev.filter((p) => p !== packageName);
-        return newSelection.length > 0 ? newSelection : ['generic'];
+        const finalSelection = newSelection.length > 0 ? newSelection : ['generic'];
+
+        // If default role is being removed, reset to generic
+        if (packageName === defaultRole && !finalSelection.includes(defaultRole)) {
+          setDefaultRole('generic');
+        }
+
+        return finalSelection;
       } else {
         return [...prev, packageName];
       }
@@ -132,12 +118,20 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     // Ensure at least one package is selected (default to generic)
     const packagesToSave = selectedPackages.length > 0 ? selectedPackages : ['generic'];
 
+    // Validate default role - must be in selected packages, or default to generic
+    const validatedDefaultRole = packagesToSave.includes(defaultRole) ? defaultRole : 'generic';
+
+    // Validate confidence threshold (must be between 0.0 and 1.0)
+    const validatedConfidenceThreshold = Math.max(0.0, Math.min(1.0, config.classificationConfidenceThreshold));
+
     chrome.storage.sync.set(
       {
         apiProvider: config.provider,
         apiModel: config.model,
         numVariants: validatedNumVariants,
+        classificationConfidenceThreshold: validatedConfidenceThreshold,
         selectedPackages: packagesToSave,
+        defaultRole: validatedDefaultRole,
       },
       () => {
         setSaved(true);
@@ -147,119 +141,212 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   };
 
   const currentProviderConfig = API_PROVIDERS[config.provider];
+  const showDefaultRoleTab = selectedPackages.length > 1 || (selectedPackages.length === 1 && !selectedPackages.includes('generic'));
 
   return (
     <div className="OptionsContainer">
       <div className="OptionsContent">
         <h1>{title}</h1>
-        <div className="SettingsSection">
-          <h2>API Configuration</h2>
-          <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
-            Select your preferred AI provider and model. API keys are managed by the extension developer.
-          </p>
 
-          <div className="SettingGroup">
-            <label htmlFor="api-provider">API Provider:</label>
-            <select
-              id="api-provider"
-              value={config.provider}
-              onChange={(e) => handleProviderChange(e.target.value as ApiConfig['provider'])}
-            >
-              {Object.entries(API_PROVIDERS).map(([key, value]) => (
-                <option key={key} value={key}>
-                  {value.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="SettingGroup">
-            <label htmlFor="api-model">Model:</label>
-            <select
-              id="api-model"
-              value={config.model}
-              onChange={(e) => setConfig({ ...config, model: e.target.value })}
-            >
-              {currentProviderConfig.models.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="SettingGroup">
-            <label htmlFor="num-variants">Number of Variants:</label>
-            <input
-              id="num-variants"
-              type="number"
-              min="1"
-              max="7"
-              value={config.numVariants}
-              onChange={(e) => {
-                const value = parseInt(e.target.value, 10);
-                if (!isNaN(value) && value >= 1 && value <= 7) {
-                  setConfig({ ...config, numVariants: value });
-                }
-              }}
-              style={{ padding: '8px', fontSize: '14px', width: '100px' }}
-            />
-            <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
-              Number of response variants to generate (1-7, default: 4)
-            </p>
-          </div>
-
-          <button className="SaveButton" onClick={handleSave}>
-            {saved ? '✓ Saved!' : 'Save Settings'}
+        {/* Tabs */}
+        <div className="TabsContainer">
+          <button
+            className={`Tab ${activeTab === 'models' ? 'TabActive' : ''}`}
+            onClick={() => setActiveTab('models')}
+          >
+            Models
           </button>
+          <button
+            className={`Tab ${activeTab === 'packages' ? 'TabActive' : ''}`}
+            onClick={() => setActiveTab('packages')}
+          >
+            Packages
+          </button>
+          {showDefaultRoleTab && (
+            <button
+              className={`Tab ${activeTab === 'defaultRole' ? 'TabActive' : ''}`}
+              onClick={() => setActiveTab('defaultRole')}
+            >
+              Default Role
+            </button>
+          )}
         </div>
 
-        <div className="SettingsSection" style={{ marginTop: '40px' }}>
-          <h2>Email Type Packages</h2>
-          <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
-            Select which email type packages to use for classification. Multiple selections are allowed.
-            If no packages are selected, "generic" will be used by default.
-          </p>
+        {/* Tab Content */}
+        <div className="TabContent">
+          {/* Models Tab */}
+          {activeTab === 'models' && (
+            <div className="SettingsSection">
+              <h2>API Configuration</h2>
+              <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
+                Select your preferred AI provider and model. API keys are managed by the extension developer.
+              </p>
 
-          <div className="SettingGroup">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {ALL_PACKAGES.map((pkg) => (
-                <label
-                  key={pkg.name}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    cursor: 'pointer',
-                    padding: '12px',
-                    border: '1px solid #e0e0e0',
-                    borderRadius: '4px',
-                    backgroundColor: selectedPackages.includes(pkg.name) ? '#f0f7ff' : '#fff',
-                  }}
+              <div className="SettingGroup">
+                <label htmlFor="api-provider">API Provider:</label>
+                <select
+                  id="api-provider"
+                  value={config.provider}
+                  onChange={(e) => handleProviderChange(e.target.value as ApiConfig['provider'])}
                 >
-                  <input
-                    type="checkbox"
-                    checked={selectedPackages.includes(pkg.name)}
-                    onChange={() => handlePackageToggle(pkg.name)}
-                    style={{ marginRight: '12px', marginTop: '2px', cursor: 'pointer' }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
-                      {pkg.name}
-                    </div>
-                    <div style={{ fontSize: '13px', color: '#5f6368', marginBottom: '4px' }}>
-                      {pkg.description}
-                    </div>
-                  </div>
-                </label>
-              ))}
-            </div>
-            <p className="HelpText" style={{ marginTop: '12px', fontSize: '12px', color: '#5f6368' }}>
-              Selected packages: {selectedPackages.length > 0 ? selectedPackages.join(', ') : 'generic (default)'}
-            </p>
-          </div>
+                  {Object.entries(API_PROVIDERS).map(([key, value]) => (
+                    <option key={key} value={key}>
+                      {value.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-          <button className="SaveButton" onClick={handleSave}>
-            {saved ? '✓ Saved!' : 'Save Settings'}
+              <div className="SettingGroup">
+                <label htmlFor="api-model">Model:</label>
+                <select
+                  id="api-model"
+                  value={config.model}
+                  onChange={(e) => setConfig({ ...config, model: e.target.value })}
+                >
+                  {currentProviderConfig.models.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="SettingGroup">
+                <label htmlFor="num-variants">Number of Variants:</label>
+                <input
+                  id="num-variants"
+                  type="number"
+                  min="1"
+                  max="7"
+                  value={config.numVariants}
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value, 10);
+                    if (!isNaN(value) && value >= 1 && value <= 7) {
+                      setConfig({ ...config, numVariants: value });
+                    }
+                  }}
+                  style={{ padding: '8px', fontSize: '14px', width: '100px' }}
+                />
+                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                  Number of response variants to generate (1-7, default: 4)
+                </p>
+              </div>
+
+              <div className="SettingGroup">
+                <label htmlFor="confidence-threshold">Minimum Classification Confidence:</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <input
+                    id="confidence-threshold"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={config.classificationConfidenceThreshold}
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value);
+                      if (!isNaN(value) && value >= 0 && value <= 1) {
+                        setConfig({ ...config, classificationConfidenceThreshold: value });
+                      }
+                    }}
+                    style={{ flex: 1, maxWidth: '300px' }}
+                  />
+                  <span style={{ minWidth: '60px', fontSize: '14px', fontWeight: 'bold' }}>
+                    {(config.classificationConfidenceThreshold * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                  If classification confidence is below this threshold, the system will use Generic package. Higher values = stricter matching (0.0-1.0, default: 0.85)
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Packages Tab */}
+          {activeTab === 'packages' && (
+            <div className="SettingsSection">
+              <h2>Email Type Packages</h2>
+              <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
+                Select which email type packages to use for classification. Multiple selections are allowed.
+                If no packages are selected, "generic" will be used by default.
+              </p>
+
+              <div className="SettingGroup">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {ALL_PACKAGES.map((pkg) => (
+                    <label
+                      key={pkg.name}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        cursor: 'pointer',
+                        padding: '12px',
+                        border: '1px solid #e0e0e0',
+                        borderRadius: '4px',
+                        backgroundColor: selectedPackages.includes(pkg.name) ? '#f0f7ff' : '#fff',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedPackages.includes(pkg.name)}
+                        onChange={() => handlePackageToggle(pkg.name)}
+                        style={{ marginRight: '12px', marginTop: '2px', cursor: 'pointer' }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
+                          {pkg.name}
+                        </div>
+                        <div style={{ fontSize: '13px', color: '#5f6368', marginBottom: '4px' }}>
+                          {pkg.description}
+                        </div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                <p className="HelpText" style={{ marginTop: '12px', fontSize: '12px', color: '#5f6368' }}>
+                  Selected packages: {selectedPackages.length > 0 ? selectedPackages.join(', ') : 'generic (default)'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Default Role Tab */}
+          {activeTab === 'defaultRole' && showDefaultRoleTab && (
+            <div className="SettingsSection">
+              <h2>Default Role</h2>
+              <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
+                Select the default role to use when generating drafts for new emails. This will be pre-selected in the dropdown.
+              </p>
+
+              <div className="SettingGroup">
+                <label htmlFor="default-role">Default Role:</label>
+                <select
+                  id="default-role"
+                  value={defaultRole}
+                  onChange={(e) => setDefaultRole(e.target.value)}
+                  style={{ padding: '8px', fontSize: '14px', width: '200px' }}
+                >
+                  {selectedPackages.map((pkgName) => {
+                    const pkg = ALL_PACKAGES.find((p) => p.name === pkgName);
+                    const displayName = pkgName === 'generic' ? 'Generic' : pkgName.charAt(0).toUpperCase() + pkgName.slice(1);
+                    return (
+                      <option key={pkgName} value={pkgName}>
+                        {displayName}
+                      </option>
+                    );
+                  })}
+                </select>
+                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                  This role will be automatically selected when generating drafts for new emails
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginTop: '40px', textAlign: 'center' }}>
+          <button className="SaveButton" onClick={handleSave} style={{ padding: '12px 32px', fontSize: '16px' }}>
+            {saved ? '✓ Saved!' : 'Save All Settings'}
           </button>
         </div>
       </div>

@@ -32,7 +32,7 @@ const Popup = () => {
     // Get icon URL
     if (browserAPI.runtime) {
       try {
-        const url = browserAPI.runtime.getURL('raicon.png');
+        const url = browserAPI.runtime.getURL('xrepl-light.png');
         setIconUrl(url);
       } catch (error) {
         console.error('Failed to get icon URL:', error);
@@ -55,7 +55,7 @@ const Popup = () => {
           {iconUrl && (
             <img src={iconUrl} alt="ResponseAble" className="popup-icon" />
           )}
-          ResponseAble
+          xRepl.ai
         </h1>
         <p className="popup-subtitle">AI-Powered Email Responses</p>
       </div>
