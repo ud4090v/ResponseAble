@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import './Options.css';
 import ALL_PACKAGES_DATA from '../../config/packages.json';
+import SUBSCRIPTION_PLANS_DATA from '../../config/subscriptionPlans.json';
 
 interface Props {
   title: string;
@@ -10,6 +11,8 @@ interface ApiConfig {
   provider: 'openai' | 'grok';
   model: string;
   numVariants: number;
+  numGoals: number;
+  numTones: number;
   classificationConfidenceThreshold: number;
 }
 
@@ -23,8 +26,24 @@ interface Package {
   contextSpecific: string;
 }
 
+interface SubscriptionPlan {
+  name: string;
+  tier: number;
+  maxGoals: number;
+  maxVariants: number;
+  maxTones: number;
+  maxGenerationsPerMonth: number;
+  availableProviders: string[];
+  availableModels: {
+    [key: string]: string[];
+  };
+  contentPackagesAllowed: boolean;
+  allContent: boolean;
+}
+
 // Master list of all available packages - imported from shared config
 const ALL_PACKAGES: Package[] = ALL_PACKAGES_DATA as Package[];
+const SUBSCRIPTION_PLANS: SubscriptionPlan[] = SUBSCRIPTION_PLANS_DATA as SubscriptionPlan[];
 
 const API_PROVIDERS = {
   openai: {
@@ -45,19 +64,28 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     provider: 'grok',
     model: 'grok-4-latest',
     numVariants: 4,
+    numGoals: 3,
+    numTones: 3,
     classificationConfidenceThreshold: 0.85,
   });
   const [selectedPackages, setSelectedPackages] = useState<string[]>(['generic']);
   const [defaultRole, setDefaultRole] = useState<string>('generic');
+  const [subscriptionPlan, setSubscriptionPlan] = useState<string>('free');
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     // Load saved settings
-    chrome.storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'classificationConfidenceThreshold', 'selectedPackages', 'defaultRole'], (result) => {
+    chrome.storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'numGoals', 'numTones', 'classificationConfidenceThreshold', 'selectedPackages', 'defaultRole', 'subscriptionPlan'], (result) => {
+      // Load subscription plan, default to 'free' if not set
+      const loadedPlan = result.subscriptionPlan && typeof result.subscriptionPlan === 'string' ? result.subscriptionPlan : 'free';
+      setSubscriptionPlan(loadedPlan);
+
       setConfig({
         provider: (result.apiProvider as ApiConfig['provider']) || 'grok',
         model: result.apiModel || 'grok-4-latest',
         numVariants: result.numVariants || 4,
+        numGoals: result.numGoals || 3,
+        numTones: result.numTones || 3,
         classificationConfidenceThreshold: result.classificationConfidenceThreshold !== undefined ? result.classificationConfidenceThreshold : 0.85,
       });
       // Load selected packages, default to ['generic'] if none selected
@@ -83,12 +111,107 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     }
   }, [selectedPackages, defaultRole]);
 
+  const getCurrentPlan = (): SubscriptionPlan | undefined => {
+    return SUBSCRIPTION_PLANS.find(p => p.name === subscriptionPlan);
+  };
+
+  const handleSubscriptionPlanChange = (planName: string) => {
+    const newPlan = SUBSCRIPTION_PLANS.find(p => p.name === planName);
+    if (!newPlan) return;
+
+    const oldPlan = getCurrentPlan();
+    const oldTier = oldPlan?.tier || 0;
+    const newTier = newPlan.tier;
+
+    // Handle content packages based on new plan
+    if (!newPlan.contentPackagesAllowed) {
+      // Downgrade: Clear all packages except generic
+      setSelectedPackages(['generic']);
+      setDefaultRole('generic');
+    } else {
+      // Upgrade: Handle allContent flag
+      if (newPlan.allContent) {
+        // Ultimate plan: Auto-select all packages
+        const allPackageNames = ALL_PACKAGES.map(p => p.name);
+        setSelectedPackages(allPackageNames);
+        // Keep current defaultRole if valid, otherwise use first package
+        if (allPackageNames.includes(defaultRole)) {
+          // Keep current
+        } else {
+          setDefaultRole(allPackageNames[0]);
+        }
+      } else {
+        // Pro plan: Keep existing packages if valid, otherwise default to generic
+        if (selectedPackages.length === 0 || (selectedPackages.length === 1 && selectedPackages[0] === 'generic')) {
+          // Keep as is or ensure generic is selected
+          if (selectedPackages.length === 0) {
+            setSelectedPackages(['generic']);
+          }
+        }
+        // Otherwise keep existing selected packages
+      }
+    }
+
+    // Handle provider/model/numVariants validation - consolidate all updates
+    let updatedConfig = { ...config };
+
+    // Check provider
+    if (!newPlan.availableProviders.includes(config.provider)) {
+      // Provider not available in new plan, reset to first available
+      const firstProvider = newPlan.availableProviders[0] as ApiConfig['provider'];
+      const firstModel = newPlan.availableModels[firstProvider]?.[0] || 'gpt-4o-mini';
+      updatedConfig.provider = firstProvider;
+      updatedConfig.model = firstModel;
+    } else {
+      // Provider is available, check if model is valid
+      const availableModels = newPlan.availableModels[config.provider] || [];
+      if (!availableModels.includes(config.model)) {
+        // Model not available, reset to first available model for provider
+        const firstModel = availableModels[0] || 'gpt-4o-mini';
+        updatedConfig.model = firstModel;
+      }
+    }
+
+    // Handle numVariants validation - adjust if current value exceeds new plan's maxVariants
+    if (config.numVariants > newPlan.maxVariants) {
+      updatedConfig.numVariants = newPlan.maxVariants;
+    }
+
+    // Handle numGoals validation - adjust if current value exceeds new plan's maxGoals
+    if (config.numGoals > newPlan.maxGoals) {
+      updatedConfig.numGoals = newPlan.maxGoals;
+    }
+
+    // Handle numTones validation - adjust if current value exceeds new plan's maxTones
+    if (config.numTones > newPlan.maxTones) {
+      updatedConfig.numTones = newPlan.maxTones;
+    }
+
+    // Apply all config updates at once
+    if (updatedConfig.provider !== config.provider || updatedConfig.model !== config.model ||
+      updatedConfig.numVariants !== config.numVariants || updatedConfig.numGoals !== config.numGoals ||
+      updatedConfig.numTones !== config.numTones) {
+      setConfig(updatedConfig);
+    }
+
+    setSubscriptionPlan(planName);
+  };
+
   const handleProviderChange = (provider: ApiConfig['provider']) => {
-    const providerConfig = API_PROVIDERS[provider];
+    const currentPlan = getCurrentPlan();
+    if (currentPlan && !currentPlan.availableProviders.includes(provider)) {
+      // Provider not available in current plan, don't allow change
+      return;
+    }
+
+    // Get available models for the provider from current plan
+    const availableModels = currentPlan?.availableModels[provider] || API_PROVIDERS[provider].models;
+    const firstModel = availableModels[0] || API_PROVIDERS[provider].models[0];
+
     setConfig({
       ...config,
       provider,
-      model: providerConfig.models[0], // Set to first model of new provider
+      model: firstModel, // Set to first available model of new provider
     });
   };
 
@@ -112,8 +235,17 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   };
 
   const handleSave = () => {
-    // Validate numVariants (must be between 1 and 7)
-    const validatedNumVariants = Math.max(1, Math.min(7, config.numVariants));
+    // Validate numVariants (must be between 1 and maxVariants from subscription plan)
+    const maxVariants = currentPlan?.maxVariants || 7;
+    const validatedNumVariants = Math.max(1, Math.min(maxVariants, config.numVariants));
+
+    // Validate numGoals (must be between 1 and maxGoals from subscription plan)
+    const maxGoals = currentPlan?.maxGoals || 5;
+    const validatedNumGoals = Math.max(1, Math.min(maxGoals, config.numGoals));
+
+    // Validate numTones (must be between 1 and maxTones from subscription plan)
+    const maxTones = currentPlan?.maxTones || 5;
+    const validatedNumTones = Math.max(1, Math.min(maxTones, config.numTones));
 
     // Ensure at least one package is selected (default to generic)
     const packagesToSave = selectedPackages.length > 0 ? selectedPackages : ['generic'];
@@ -129,9 +261,12 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         apiProvider: config.provider,
         apiModel: config.model,
         numVariants: validatedNumVariants,
+        numGoals: validatedNumGoals,
+        numTones: validatedNumTones,
         classificationConfidenceThreshold: validatedConfidenceThreshold,
         selectedPackages: packagesToSave,
         defaultRole: validatedDefaultRole,
+        subscriptionPlan: subscriptionPlan,
       },
       () => {
         setSaved(true);
@@ -140,7 +275,21 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     );
   };
 
-  const currentProviderConfig = API_PROVIDERS[config.provider];
+  const currentPlan = getCurrentPlan();
+  const availableProvidersForPlan = currentPlan?.availableProviders || ['openai', 'grok'];
+  const availableModelsForProvider = currentPlan?.availableModels[config.provider] || API_PROVIDERS[config.provider].models;
+
+  // Filter providers and models based on subscription plan
+  const filteredProviders = Object.entries(API_PROVIDERS).filter(([key]) =>
+    availableProvidersForPlan.includes(key)
+  );
+  const currentProviderConfig = {
+    ...API_PROVIDERS[config.provider],
+    models: availableModelsForProvider.filter(model =>
+      availableModelsForProvider.includes(model)
+    ),
+  };
+
   const showDefaultRoleTab = selectedPackages.length > 1 || (selectedPackages.length === 1 && !selectedPackages.includes('generic'));
 
   return (
@@ -155,6 +304,12 @@ const Options: React.FC<Props> = ({ title }: Props) => {
             onClick={() => setActiveTab('models')}
           >
             Models
+          </button>
+          <button
+            className={`Tab ${activeTab === 'generation' ? 'TabActive' : ''}`}
+            onClick={() => setActiveTab('generation')}
+          >
+            Generation
           </button>
           <button
             className={`Tab ${activeTab === 'packages' ? 'TabActive' : ''}`}
@@ -189,7 +344,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                   value={config.provider}
                   onChange={(e) => handleProviderChange(e.target.value as ApiConfig['provider'])}
                 >
-                  {Object.entries(API_PROVIDERS).map(([key, value]) => (
+                  {filteredProviders.map(([key, value]) => (
                     <option key={key} value={key}>
                       {value.name}
                     </option>
@@ -202,7 +357,12 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 <select
                   id="api-model"
                   value={config.model}
-                  onChange={(e) => setConfig({ ...config, model: e.target.value })}
+                  onChange={(e) => {
+                    // Validate model is available for current plan
+                    if (availableModelsForProvider.includes(e.target.value)) {
+                      setConfig({ ...config, model: e.target.value });
+                    }
+                  }}
                 >
                   {currentProviderConfig.models.map((model) => (
                     <option key={model} value={model}>
@@ -212,24 +372,83 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 </select>
               </div>
 
+            </div>
+          )}
+
+          {/* Generation Tab */}
+          {activeTab === 'generation' && (
+            <div className="SettingsSection">
+              <h2>Generation Preferences</h2>
+              <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
+                Configure preferences for draft generation and email classification.
+              </p>
+
               <div className="SettingGroup">
                 <label htmlFor="num-variants">Number of Variants:</label>
                 <input
                   id="num-variants"
                   type="number"
                   min="1"
-                  max="7"
+                  max={currentPlan?.maxVariants || 7}
                   value={config.numVariants}
                   onChange={(e) => {
                     const value = parseInt(e.target.value, 10);
-                    if (!isNaN(value) && value >= 1 && value <= 7) {
+                    const maxVariants = currentPlan?.maxVariants || 7;
+                    if (!isNaN(value) && value >= 1 && value <= maxVariants) {
                       setConfig({ ...config, numVariants: value });
                     }
                   }}
                   style={{ padding: '8px', fontSize: '14px', width: '100px' }}
                 />
                 <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
-                  Number of response variants to generate (1-7, default: 4)
+                  Number of response variants to generate (1-{currentPlan?.maxVariants || 7})
+                  {currentPlan && ` - Your ${currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} plan allows up to ${currentPlan.maxVariants} variants`}
+                </p>
+              </div>
+
+              <div className="SettingGroup">
+                <label htmlFor="num-goals">Number of Goals:</label>
+                <input
+                  id="num-goals"
+                  type="number"
+                  min="1"
+                  max={currentPlan?.maxGoals || 5}
+                  value={config.numGoals}
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value, 10);
+                    const maxGoals = currentPlan?.maxGoals || 5;
+                    if (!isNaN(value) && value >= 1 && value <= maxGoals) {
+                      setConfig({ ...config, numGoals: value });
+                    }
+                  }}
+                  style={{ padding: '8px', fontSize: '14px', width: '100px' }}
+                />
+                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                  Number of response goals to generate (1-{currentPlan?.maxGoals || 5})
+                  {currentPlan && ` - Your ${currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} plan allows up to ${currentPlan.maxGoals} goals`}
+                </p>
+              </div>
+
+              <div className="SettingGroup">
+                <label htmlFor="num-tones">Number of Tones:</label>
+                <input
+                  id="num-tones"
+                  type="number"
+                  min="1"
+                  max={currentPlan?.maxTones || 5}
+                  value={config.numTones}
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value, 10);
+                    const maxTones = currentPlan?.maxTones || 5;
+                    if (!isNaN(value) && value >= 1 && value <= maxTones) {
+                      setConfig({ ...config, numTones: value });
+                    }
+                  }}
+                  style={{ padding: '8px', fontSize: '14px', width: '100px' }}
+                />
+                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                  Number of tone options to generate (1-{currentPlan?.maxTones || 5})
+                  {currentPlan && ` - Your ${currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} plan allows up to ${currentPlan.maxTones} tones`}
                 </p>
               </div>
 
@@ -265,48 +484,83 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           {/* Packages Tab */}
           {activeTab === 'packages' && (
             <div className="SettingsSection">
-              <h2>Email Type Packages</h2>
+              <h2>Subscription Plan</h2>
               <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
-                Select which email type packages to use for classification. Multiple selections are allowed.
-                If no packages are selected, "generic" will be used by default.
+                Select your subscription plan. This determines available features and limits.
               </p>
 
               <div className="SettingGroup">
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {ALL_PACKAGES.map((pkg) => (
-                    <label
-                      key={pkg.name}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        cursor: 'pointer',
-                        padding: '12px',
-                        border: '1px solid #e0e0e0',
-                        borderRadius: '4px',
-                        backgroundColor: selectedPackages.includes(pkg.name) ? '#f0f7ff' : '#fff',
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedPackages.includes(pkg.name)}
-                        onChange={() => handlePackageToggle(pkg.name)}
-                        style={{ marginRight: '12px', marginTop: '2px', cursor: 'pointer' }}
-                      />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
-                          {pkg.name}
-                        </div>
-                        <div style={{ fontSize: '13px', color: '#5f6368', marginBottom: '4px' }}>
-                          {pkg.description}
-                        </div>
-                      </div>
-                    </label>
+                <label htmlFor="subscription-plan">Subscription Plan:</label>
+                <select
+                  id="subscription-plan"
+                  value={subscriptionPlan}
+                  onChange={(e) => handleSubscriptionPlanChange(e.target.value)}
+                  style={{ padding: '8px', fontSize: '14px', width: '200px' }}
+                >
+                  {SUBSCRIPTION_PLANS.map((plan) => (
+                    <option key={plan.name} value={plan.name}>
+                      {plan.name.charAt(0).toUpperCase() + plan.name.slice(1)}
+                    </option>
                   ))}
-                </div>
-                <p className="HelpText" style={{ marginTop: '12px', fontSize: '12px', color: '#5f6368' }}>
-                  Selected packages: {selectedPackages.length > 0 ? selectedPackages.join(', ') : 'generic (default)'}
-                </p>
+                </select>
+                {currentPlan && (
+                  <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                    Max Goals: {currentPlan.maxGoals} | Max Variants: {currentPlan.maxVariants} | Max Tones: {currentPlan.maxTones} |
+                    Generations: {currentPlan.maxGenerationsPerMonth === 999999999999 ? 'Unlimited' : currentPlan.maxGenerationsPerMonth}/month
+                  </p>
+                )}
               </div>
+
+              {/* Email Type Packages Section - Only show if contentPackagesAllowed */}
+              {currentPlan?.contentPackagesAllowed && (
+                <>
+                  <h2 style={{ marginTop: '40px' }}>Email Type Packages</h2>
+                  <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
+                    Select which email type packages to use for classification. Multiple selections are allowed.
+                    If no packages are selected, "generic" will be used by default.
+                    {currentPlan.allContent && ' (All packages are automatically selected for Ultimate plan)'}
+                  </p>
+
+                  <div className="SettingGroup">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {ALL_PACKAGES.map((pkg) => (
+                        <label
+                          key={pkg.name}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            cursor: currentPlan.allContent ? 'not-allowed' : 'pointer',
+                            padding: '12px',
+                            border: '1px solid #e0e0e0',
+                            borderRadius: '4px',
+                            backgroundColor: selectedPackages.includes(pkg.name) ? '#f0f7ff' : '#fff',
+                            opacity: currentPlan.allContent ? 0.7 : 1,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedPackages.includes(pkg.name)}
+                            onChange={() => handlePackageToggle(pkg.name)}
+                            disabled={currentPlan.allContent}
+                            style={{ marginRight: '12px', marginTop: '2px', cursor: currentPlan.allContent ? 'not-allowed' : 'pointer' }}
+                          />
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
+                              {pkg.name}
+                            </div>
+                            <div style={{ fontSize: '13px', color: '#5f6368', marginBottom: '4px' }}>
+                              {pkg.description}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="HelpText" style={{ marginTop: '12px', fontSize: '12px', color: '#5f6368' }}>
+                      Selected packages: {selectedPackages.length > 0 ? selectedPackages.join(', ') : 'generic (default)'}
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
