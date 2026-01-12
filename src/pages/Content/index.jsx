@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
 import ALL_PACKAGES_DATA from '../../config/packages.json';
+import SUBSCRIPTION_PLANS_DATA from '../../config/subscriptionPlans.json';
 
 // Ensure chrome API is available
 const getChromeRuntime = () => {
@@ -20,6 +21,8 @@ let apiConfig = {
     provider: 'grok',
     model: 'grok-4-latest',
     numVariants: 4,
+    numGoals: 3,
+    numTones: 3,
     classificationConfidenceThreshold: 0.85,
 };
 
@@ -74,13 +77,17 @@ const loadApiConfig = async () => {
             resolve(apiConfig);
             return;
         }
-        storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'classificationConfidenceThreshold'], (result) => {
+        storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'numGoals', 'numTones', 'classificationConfidenceThreshold'], (result) => {
             const numVariants = result.numVariants || 4;
+            const numGoals = result.numGoals || 3;
+            const numTones = result.numTones || 3;
             const confidenceThreshold = result.classificationConfidenceThreshold !== undefined ? result.classificationConfidenceThreshold : 0.85;
             apiConfig = {
                 provider: result.apiProvider || 'grok',
                 model: result.apiModel || 'grok-4-latest',
                 numVariants: Math.max(1, Math.min(7, numVariants)), // Clamp between 1 and 7
+                numGoals: Math.max(1, Math.min(5, numGoals)), // Clamp between 1 and 5
+                numTones: Math.max(1, Math.min(5, numTones)), // Clamp between 1 and 5
                 classificationConfidenceThreshold: Math.max(0.0, Math.min(1.0, confidenceThreshold)), // Clamp between 0.0 and 1.0
             };
             resolve(apiConfig);
@@ -95,7 +102,7 @@ loadApiConfig();
 const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
 if (storage) {
     storage.onChanged.addListener((changes) => {
-        if (changes.apiProvider || changes.apiModel || changes.numVariants || changes.classificationConfidenceThreshold) {
+        if (changes.apiProvider || changes.apiModel || changes.numVariants || changes.numGoals || changes.numTones || changes.classificationConfidenceThreshold) {
             loadApiConfig();
         }
     });
@@ -232,6 +239,7 @@ const detectPlatform = () => {
 
 // Master list of all available packages for email type classification - imported from shared config
 const ALL_PACKAGES = ALL_PACKAGES_DATA;
+const SUBSCRIPTION_PLANS = SUBSCRIPTION_PLANS_DATA;
 
 // Helper function to get the base package name dynamically
 const getBasePackageName = () => {
@@ -267,7 +275,23 @@ const getUserPackages = async () => {
             return;
         }
 
-        browserAPI.storage.sync.get(['selectedPackages'], (result) => {
+        browserAPI.storage.sync.get(['selectedPackages', 'subscriptionPlan'], (result) => {
+            // Get subscription plan, default to 'free' if not set
+            const subscriptionPlanName = result.subscriptionPlan && typeof result.subscriptionPlan === 'string'
+                ? result.subscriptionPlan
+                : 'free';
+
+            // Find subscription plan config
+            const subscriptionPlan = SUBSCRIPTION_PLANS.find(p => p.name === subscriptionPlanName) || SUBSCRIPTION_PLANS.find(p => p.name === 'free');
+
+            // Check if allContent is enabled (Ultimate plan)
+            if (subscriptionPlan && subscriptionPlan.allContent) {
+                // Return all packages - no filtering needed
+                resolve(ALL_PACKAGES);
+                return;
+            }
+
+            // Otherwise, use existing logic with selectedPackages
             const basePackageName = getBasePackageName();
             const selectedPackageNames = result.selectedPackages && Array.isArray(result.selectedPackages) && result.selectedPackages.length > 0
                 ? result.selectedPackages
@@ -656,7 +680,7 @@ CRITICAL: Do NOT analyze the email content to determine or infer any intent. The
 
 Return a JSON object with:
 {
-  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. These goals should be contextually relevant to the email content while remaining generic professional responses. Prioritize positive, constructive, and engaging response goals (e.g., "Express interest", "Request more information", "Schedule a discussion") over negative or defensive ones (e.g., "Politely decline", "Reject the offer"). The first goal should be the most positive and constructive response option.
+  "response_goals": Array of up to ${apiConfig.numGoals || 3} most appropriate goals for the recipient's reply, ranked by suitability. These goals should be contextually relevant to the email content while remaining generic professional responses. Prioritize positive, constructive, and engaging response goals (e.g., "Express interest", "Request more information", "Schedule a discussion") over negative or defensive ones (e.g., "Politely decline", "Reject the offer"). The first goal should be the most positive and constructive response option.
   "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
   "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
   "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
@@ -733,41 +757,57 @@ CRITICAL INSTRUCTIONS:
             }
 
             // ============================================================================
-            // LIMIT BASE PACKAGE TO 1 GOAL (FREE PLAN TEASER) - FOR REPLIES
+            // LIMIT GOALS TO CONFIGURED numGoals
             // ============================================================================
-            // Limit base package to only 1 goal/tab (first tab - free plan teaser)
-            if (intentGoalsResult.response_goals && intentGoalsResult.response_goals.length > 0) {
-                // Keep only the first (recommended) goal
-                const firstGoal = intentGoalsResult.response_goals[0];
-                intentGoalsResult.response_goals = [firstGoal];
-                // Keep the original goal title (first tab already has "Recommended" mark in UI)
-                if (intentGoalsResult.goal_titles && intentGoalsResult.goal_titles[firstGoal]) {
-                    intentGoalsResult.goal_titles = {
-                        [firstGoal]: intentGoalsResult.goal_titles[firstGoal]
-                    };
-                } else {
-                    // Generate a simple title if not present
-                    intentGoalsResult.goal_titles = {
-                        [firstGoal]: firstGoal.split(' ').slice(0, 3).join(' ')
-                    };
-                }
-                // Keep only variants for the first goal
-                if (intentGoalsResult.variant_sets && intentGoalsResult.variant_sets[firstGoal]) {
-                    const variants = intentGoalsResult.variant_sets[firstGoal];
-                    // Ensure we have the expected number of variants
-                    if (variants.length < numVariants) {
-                        // Pad with fallback variants if needed
-                        const fallbackVariants = ['Professional', 'Friendly', 'Concise', 'Warm', 'Direct', 'Polite'];
-                        const needed = numVariants - variants.length;
-                        const additional = fallbackVariants.filter(v => !variants.includes(v)).slice(0, needed);
-                        variants.push(...additional);
+            const maxGoals = apiConfig.numGoals || 3;
+            if (intentGoalsResult.response_goals && intentGoalsResult.response_goals.length > maxGoals) {
+                intentGoalsResult.response_goals = intentGoalsResult.response_goals.slice(0, maxGoals);
+                // Update goal_titles and variant_sets to match
+                const limitedGoalTitles = {};
+                const limitedVariantSets = {};
+                intentGoalsResult.response_goals.forEach(goal => {
+                    if (intentGoalsResult.goal_titles && intentGoalsResult.goal_titles[goal]) {
+                        limitedGoalTitles[goal] = intentGoalsResult.goal_titles[goal];
                     }
-                    // Limit to numVariants if more than expected
-                    intentGoalsResult.variant_sets = {
-                        [firstGoal]: variants.slice(0, numVariants)
-                    };
-                }
-                // If variant_sets[firstGoal] doesn't exist, it will be handled by the defaultVariants logic later
+                    if (intentGoalsResult.variant_sets && intentGoalsResult.variant_sets[goal]) {
+                        limitedVariantSets[goal] = intentGoalsResult.variant_sets[goal];
+                    }
+                });
+                intentGoalsResult.goal_titles = limitedGoalTitles;
+                intentGoalsResult.variant_sets = limitedVariantSets;
+            }
+
+            // Limit tones per goal to configured numTones
+            const maxTones = apiConfig.numTones || 3;
+            if (intentGoalsResult.tone_sets) {
+                Object.keys(intentGoalsResult.tone_sets).forEach(goal => {
+                    if (Array.isArray(intentGoalsResult.tone_sets[goal]) && intentGoalsResult.tone_sets[goal].length > maxTones) {
+                        intentGoalsResult.tone_sets[goal] = intentGoalsResult.tone_sets[goal].slice(0, maxTones);
+                    }
+                });
+            }
+
+            // ============================================================================
+            // LIMIT BASE PACKAGE TO CONFIGURED numGoals - FOR REPLIES
+            // ============================================================================
+            // Limit base package to configured numGoals (already limited above, but ensure variants are correct)
+            if (intentGoalsResult.response_goals && intentGoalsResult.response_goals.length > 0) {
+                // Ensure variants are correct for each goal
+                intentGoalsResult.response_goals.forEach(goal => {
+                    if (intentGoalsResult.variant_sets && intentGoalsResult.variant_sets[goal]) {
+                        const variants = intentGoalsResult.variant_sets[goal];
+                        // Ensure we have the expected number of variants
+                        if (variants.length < numVariants) {
+                            // Pad with fallback variants if needed
+                            const fallbackVariants = ['Professional', 'Friendly', 'Concise', 'Warm', 'Direct', 'Polite'];
+                            const needed = numVariants - variants.length;
+                            const additional = fallbackVariants.filter(v => !variants.includes(v)).slice(0, needed);
+                            variants.push(...additional);
+                        }
+                        // Limit to numVariants if more than expected
+                        intentGoalsResult.variant_sets[goal] = variants.slice(0, numVariants);
+                    }
+                });
             }
         } else {
             // Type is available - use normal intent/goals determination from email
@@ -777,7 +817,7 @@ CRITICAL INSTRUCTIONS:
             const intentGoalsPrompt = `You are an expert email classifier. Analyze ONLY the provided email and return a JSON object with:
 {
   "intent": Determine the sender's primary intent from the recipient's perspective. What is the sender specifically asking, requesting, or doing in THIS email? Be specific and contextual.
-  "response_goals": Array of up to 5 most appropriate goals for the recipient's reply, ranked by suitability. These goals MUST be based on and directly address the intent you determined above. Each goal should be a specific action the recipient should take to respond to that intent.
+  "response_goals": Array of up to ${apiConfig.numGoals || 3} most appropriate goals for the recipient's reply, ranked by suitability. These goals MUST be based on and directly address the intent you determined above. Each goal should be a specific action the recipient should take to respond to that intent.
   "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
   "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
   "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
@@ -850,7 +890,7 @@ Analyze the conversation history to determine:
 Return ONLY a JSON object with:
 {
   "tone_needed": string (the single most appropriate tone for the reply - must be a SHORT tone name, 1-2 words max, NOT a full sentence),
-  "tone_sets": Object with keys matching these goals: ${JSON.stringify(intentGoalsResult.response_goals)}, each containing array of 3-4 SHORT tone names (1-2 words max) ranked by appropriateness for the relationship. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
+  "tone_sets": Object with keys matching these goals: ${JSON.stringify(intentGoalsResult.response_goals)}, each containing array of ${apiConfig.numTones || 3} SHORT tone names (1-2 words max) ranked by appropriateness for the relationship. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
 }
 
 Return ONLY valid JSON, no other text.`;
@@ -1122,22 +1162,39 @@ ${previousThreadHistory ? `=== FULL THREAD HISTORY (for tone/dynamic analysis) =
                 ? classification.goal_titles
                 : {};
 
-            // Check if this is base package and limit to 1 goal if needed
-            const basePackageName = getBasePackageName();
-            const isGenericInClassification = classification.type === basePackageName || (matchedType && matchedType.base === true);
-            if (isGenericInClassification && response_goals.length > 1) {
-                const firstGoal = response_goals[0];
-                response_goals = [firstGoal]; // Keep only first goal
-                // Limit goal_titles and variant_sets to first goal only
-                if (goal_titles[firstGoal]) {
-                    goal_titles = { [firstGoal]: goal_titles[firstGoal] };
-                } else {
-                    goal_titles = { [firstGoal]: firstGoal.split(' ').slice(0, 3).join(' ') };
-                }
-                if (variant_sets[firstGoal]) {
-                    variant_sets = { [firstGoal]: variant_sets[firstGoal] };
-                }
-                // If variant_sets[firstGoal] doesn't exist, it will be handled by the defaultVariants logic later (lines 1145-1156)
+            // Limit goals to configured numGoals
+            const maxGoals = apiConfig.numGoals || 3;
+            if (response_goals.length > maxGoals) {
+                response_goals = response_goals.slice(0, maxGoals);
+                // Also limit goal_titles and variant_sets to match
+                const limitedGoalTitles = {};
+                const limitedVariantSets = {};
+                const limitedToneSets = {};
+                response_goals.forEach(goal => {
+                    if (goal_titles[goal]) limitedGoalTitles[goal] = goal_titles[goal];
+                    if (variant_sets[goal]) limitedVariantSets[goal] = variant_sets[goal];
+                    if (tone_sets[goal]) limitedToneSets[goal] = tone_sets[goal];
+                });
+                goal_titles = limitedGoalTitles;
+                variant_sets = limitedVariantSets;
+                // Update tone_sets in classification object
+                Object.keys(tone_sets).forEach(goal => {
+                    if (!response_goals.includes(goal)) {
+                        delete tone_sets[goal];
+                    } else if (Array.isArray(tone_sets[goal]) && tone_sets[goal].length > maxGoals) {
+                        // Limit tones per goal to configured numTones
+                        const maxTones = apiConfig.numTones || 3;
+                        tone_sets[goal] = tone_sets[goal].slice(0, maxTones);
+                    }
+                });
+            } else {
+                // Limit tones per goal to configured numTones even if goals are within limit
+                const maxTones = apiConfig.numTones || 3;
+                Object.keys(tone_sets).forEach(goal => {
+                    if (Array.isArray(tone_sets[goal]) && tone_sets[goal].length > maxTones) {
+                        tone_sets[goal] = tone_sets[goal].slice(0, maxTones);
+                    }
+                });
             }
 
             // Helper function to generate short title from goal text
@@ -2926,7 +2983,7 @@ ${userAccountName || '[Name]'}`;
         // Try to determine tones based on context, but fallback to defaults
         let toneResult = {
             tone_needed: 'Professional',
-            tone_sets: { [goal]: defaultTones.slice(0, 4) } // Use first 4 default tones
+            tone_sets: { [goal]: defaultTones.slice(0, apiConfig.numTones || 3) } // Use configured number of default tones
         };
 
         // If we have typed content, try to determine more appropriate tones
@@ -2943,7 +3000,7 @@ ${composeContext}
 Return ONLY a JSON object with:
 {
   "tone_needed": string (the single most appropriate default tone for this new email - must be a SHORT tone name, 1-2 words max, NOT a full sentence),
-  "tone_sets": Object with key "Generate appropriate draft", containing array of 3-4 SHORT tone names (1-2 words max) ranked by appropriateness. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
+  "tone_sets": Object with key "Generate appropriate draft", containing array of ${apiConfig.numTones || 3} SHORT tone names (1-2 words max) ranked by appropriateness. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
 }
 
 Return ONLY valid JSON, no other text.`;
@@ -2995,15 +3052,15 @@ Return ONLY valid JSON, no other text.`;
                     toneResult.tone_sets[goal] = parsedToneResult.tone_sets[goal].map(cleanToneValue).filter((t, i, arr) => arr.indexOf(t) === i);
                     // Ensure we have at least 2 tones for dropdown to show
                     if (toneResult.tone_sets[goal].length < 2) {
-                        toneResult.tone_sets[goal] = defaultTones.slice(0, 4);
+                        toneResult.tone_sets[goal] = defaultTones.slice(0, apiConfig.numTones || 3);
                     }
                 } else {
-                    toneResult.tone_sets[goal] = defaultTones.slice(0, 4);
+                    toneResult.tone_sets[goal] = defaultTones.slice(0, apiConfig.numTones || 3);
                 }
             } catch (toneError) {
                 console.error('Tone determination error for generic draft:', toneError);
                 // Use defaults
-                toneResult.tone_sets[goal] = defaultTones.slice(0, 4);
+                toneResult.tone_sets[goal] = defaultTones.slice(0, apiConfig.numTones || 3);
             }
         }
 
@@ -3168,41 +3225,56 @@ CRITICAL INSTRUCTIONS:
         }
 
         // ============================================================================
-        // LIMIT BASE PACKAGE TO 1 GOAL (FREE PLAN TEASER)
+        // LIMIT GOALS TO CONFIGURED numGoals
         // ============================================================================
-        // Limit base package to only 1 goal/tab (first tab - free plan teaser)
-        if (isGenericPackage && intentGoalsResult.response_goals && intentGoalsResult.response_goals.length > 0) {
-            // Keep only the first (recommended) goal
-            const firstGoal = intentGoalsResult.response_goals[0];
-            intentGoalsResult.response_goals = [firstGoal];
-            // Keep the original goal title (first tab already has "Recommended" mark in UI)
-            if (intentGoalsResult.goal_titles && intentGoalsResult.goal_titles[firstGoal]) {
-                intentGoalsResult.goal_titles = {
-                    [firstGoal]: intentGoalsResult.goal_titles[firstGoal]
-                };
-            } else {
-                // Generate a simple title if not present
-                intentGoalsResult.goal_titles = {
-                    [firstGoal]: firstGoal.split(' ').slice(0, 3).join(' ')
-                };
-            }
-            // Keep only variants for the first goal
-            if (intentGoalsResult.variant_sets && intentGoalsResult.variant_sets[firstGoal]) {
-                const variants = intentGoalsResult.variant_sets[firstGoal];
-                // Ensure we have the expected number of variants
-                if (variants.length < numVariants) {
-                    // Pad with fallback variants if needed
-                    const fallbackVariants = ['Professional', 'Friendly', 'Concise', 'Warm', 'Direct', 'Polite'];
-                    const needed = numVariants - variants.length;
-                    const additional = fallbackVariants.filter(v => !variants.includes(v)).slice(0, needed);
-                    variants.push(...additional);
+        const maxGoals = apiConfig.numGoals || 3;
+        if (intentGoalsResult.response_goals && intentGoalsResult.response_goals.length > maxGoals) {
+            intentGoalsResult.response_goals = intentGoalsResult.response_goals.slice(0, maxGoals);
+            // Update goal_titles and variant_sets to match
+            const limitedGoalTitles = {};
+            const limitedVariantSets = {};
+            intentGoalsResult.response_goals.forEach(goal => {
+                if (intentGoalsResult.goal_titles && intentGoalsResult.goal_titles[goal]) {
+                    limitedGoalTitles[goal] = intentGoalsResult.goal_titles[goal];
                 }
-                // Limit to numVariants if more than expected
-                intentGoalsResult.variant_sets = {
-                    [firstGoal]: variants.slice(0, numVariants)
-                };
-            }
-            // If variant_sets[firstGoal] doesn't exist, it will be handled by the defaultVariants logic in showDraftsOverlay
+                if (intentGoalsResult.variant_sets && intentGoalsResult.variant_sets[goal]) {
+                    limitedVariantSets[goal] = intentGoalsResult.variant_sets[goal];
+                }
+            });
+            intentGoalsResult.goal_titles = limitedGoalTitles;
+            intentGoalsResult.variant_sets = limitedVariantSets;
+        }
+
+        // Limit tones per goal to configured numTones
+        const maxTones = apiConfig.numTones || 3;
+        if (intentGoalsResult.tone_sets) {
+            Object.keys(intentGoalsResult.tone_sets).forEach(goal => {
+                if (Array.isArray(intentGoalsResult.tone_sets[goal]) && intentGoalsResult.tone_sets[goal].length > maxTones) {
+                    intentGoalsResult.tone_sets[goal] = intentGoalsResult.tone_sets[goal].slice(0, maxTones);
+                }
+            });
+        }
+
+        // ============================================================================
+        // ENSURE VARIANTS ARE CORRECT FOR ALL GOALS (for base package)
+        // ============================================================================
+        // Ensure variants are correct for each goal (already limited to numGoals above)
+        if (isGenericPackage && intentGoalsResult.response_goals && intentGoalsResult.response_goals.length > 0) {
+            intentGoalsResult.response_goals.forEach(goal => {
+                if (intentGoalsResult.variant_sets && intentGoalsResult.variant_sets[goal]) {
+                    const variants = intentGoalsResult.variant_sets[goal];
+                    // Ensure we have the expected number of variants
+                    if (variants.length < numVariants) {
+                        // Pad with fallback variants if needed
+                        const fallbackVariants = ['Professional', 'Friendly', 'Concise', 'Warm', 'Direct', 'Polite'];
+                        const needed = numVariants - variants.length;
+                        const additional = fallbackVariants.filter(v => !variants.includes(v)).slice(0, needed);
+                        variants.push(...additional);
+                    }
+                    // Limit to numVariants if more than expected
+                    intentGoalsResult.variant_sets[goal] = variants.slice(0, numVariants);
+                }
+            });
         }
 
         // ============================================================================
@@ -3216,7 +3288,7 @@ The email goals are: ${JSON.stringify(intentGoalsResult.response_goals)}
 Return ONLY a JSON object with:
 {
   "tone_needed": string (the single most appropriate default tone for this new email - must be a SHORT tone name, 1-2 words max, NOT a full sentence),
-  "tone_sets": Object with keys matching these goals: ${JSON.stringify(intentGoalsResult.response_goals)}, each containing array of 3-4 SHORT tone names (1-2 words max) ranked by appropriateness. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
+  "tone_sets": Object with keys matching these goals: ${JSON.stringify(intentGoalsResult.response_goals)}, each containing array of ${apiConfig.numTones || 3} SHORT tone names (1-2 words max) ranked by appropriateness. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
 }
 
 Return ONLY valid JSON, no other text.`;

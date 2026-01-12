@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "ResponseABLE.ai",
-  "description": "Responsible AI for Every Response",
+  "name": "xReplAI",
+  "description": "Drafts that convert",
   "options_page": "options.html",
   "background": {
     "service_worker": "background.bundle.js"
