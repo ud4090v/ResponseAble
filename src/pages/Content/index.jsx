@@ -3981,7 +3981,7 @@ const showStreamingOverlay = (initialText = '') => {
         <div style="flex-shrink: 0;">
             <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;">
                 <span style="display: inline-block; width: 24px; height: 24px; border: 3px solid #1a73e8; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></span>
-                Generating Drafts...
+                xRepl.ai - Generating Drafts...
             </h2>
             <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
         </div>
@@ -4014,6 +4014,50 @@ const showStreamingOverlay = (initialText = '') => {
     return overlay;
 };
 
+// Format streaming content with variant labels and separators
+const formatStreamingContent = (content) => {
+    // Escape HTML
+    let displayText = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    
+    // Split by the variant separator
+    const separator = '|||RESPONSE_VARIANT|||';
+    const parts = displayText.split(separator);
+    
+    if (parts.length <= 1) {
+        // No separators yet, just return the content as-is
+        return displayText;
+    }
+    
+    // Format each variant with a label and horizontal separator
+    const formattedParts = parts.map((part, index) => {
+        const variantNum = index + 1;
+        // Try to extract a title from the first line if it looks like a title
+        const lines = part.trim().split('\n');
+        let title = '';
+        let body = part.trim();
+        
+        // Check if first line could be a title (short, no punctuation at end except colon)
+        if (lines.length > 1 && lines[0].length < 50 && !lines[0].match(/[.!?]$/)) {
+            title = lines[0].replace(/:$/, '').trim();
+            body = lines.slice(1).join('\n').trim();
+        }
+        
+        const variantLabel = title 
+            ? `<strong style="color: #1a73e8;">Variant ${variantNum} - ${title}</strong>`
+            : `<strong style="color: #1a73e8;">Variant ${variantNum}</strong>`;
+        
+        if (index === 0) {
+            // First variant - no separator before it
+            return `${variantLabel}\n${body}`;
+        } else {
+            // Add horizontal separator before subsequent variants
+            return `<hr style="border: none; border-top: 1px solid #dadce0; margin: 16px 0;">${variantLabel}\n${body}`;
+        }
+    });
+    
+    return formattedParts.join('');
+};
+
 // Update streaming overlay content
 const updateStreamingOverlay = (content) => {
     const overlay = document.querySelector('.responseable-overlay.responseable-streaming');
@@ -4021,8 +4065,8 @@ const updateStreamingOverlay = (content) => {
     
     const streamingContent = overlay.querySelector('.responseable-streaming-content');
     if (streamingContent) {
-        const displayText = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        streamingContent.innerHTML = `${displayText}<span class="responseable-typing-cursor" style="display: inline-block; width: 2px; height: 1em; background: #1a73e8; margin-left: 2px;"></span>`;
+        const formattedContent = formatStreamingContent(content);
+        streamingContent.innerHTML = `${formattedContent}<span class="responseable-typing-cursor" style="display: inline-block; width: 2px; height: 1em; background: #1a73e8; margin-left: 2px;"></span>`;
         
         // Scroll to bottom
         const scrollContainer = overlay.querySelector('.responseable-drafts-scroll');
