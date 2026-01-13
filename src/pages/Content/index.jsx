@@ -2404,16 +2404,50 @@ const createIconOnlyButton = (buttonTooltip, platform) => {
 };
 
 // Create button with icon
-// Helper function to update button text while preserving icon
+// Helper function to update button text while preserving icon, with fade-in animation
 const updateButtonText = (button, newText) => {
-    // Find the text node (should be the last child after the icon)
-    const textNodes = Array.from(button.childNodes).filter(node => node.nodeType === Node.TEXT_NODE);
-    if (textNodes.length > 0) {
-        // Update the last text node (the button text)
-        textNodes[textNodes.length - 1].textContent = newText;
+    // Check if this is a status update (Analyzing/Generating) to apply animations
+    const isStatusUpdate = newText === 'Analyzing...' || newText === 'Generating...';
+    
+    // Find the icon and apply pulsating animation during status updates
+    const iconImg = button.querySelector('img');
+    if (iconImg) {
+        if (isStatusUpdate) {
+            iconImg.style.animation = 'responseable-icon-pulse 1s ease-in-out infinite';
+        } else {
+            iconImg.style.animation = 'none';
+        }
+    }
+    
+    // Find the text span or create one
+    let textSpan = button.querySelector('.responseable-button-text');
+    if (!textSpan) {
+        // Convert existing text node to span for animation support
+        const textNodes = Array.from(button.childNodes).filter(node => node.nodeType === Node.TEXT_NODE);
+        if (textNodes.length > 0) {
+            textSpan = document.createElement('span');
+            textSpan.className = 'responseable-button-text';
+            textSpan.textContent = textNodes[textNodes.length - 1].textContent;
+            textNodes[textNodes.length - 1].replaceWith(textSpan);
+        } else {
+            textSpan = document.createElement('span');
+            textSpan.className = 'responseable-button-text';
+            button.appendChild(textSpan);
+        }
+    }
+    
+    // Apply fade-in animation for status updates
+    if (isStatusUpdate) {
+        textSpan.style.opacity = '0';
+        textSpan.textContent = newText;
+        textSpan.style.transition = 'opacity 0.3s ease-in';
+        requestAnimationFrame(() => {
+            textSpan.style.opacity = '1';
+        });
     } else {
-        // If no text node exists, append one
-        button.appendChild(document.createTextNode(newText));
+        textSpan.style.transition = 'none';
+        textSpan.style.opacity = '1';
+        textSpan.textContent = newText;
     }
 };
 
@@ -2421,20 +2455,33 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
     const generateButton = document.createElement('button');
     generateButton.type = 'button';
 
+    // Inject CSS keyframes for icon pulse animation (only once)
+    if (!document.querySelector('#responseable-button-animations')) {
+        const styleSheet = document.createElement('style');
+        styleSheet.id = 'responseable-button-animations';
+        styleSheet.textContent = `
+            @keyframes responseable-icon-pulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.1); }
+            }
+        `;
+        document.head.appendChild(styleSheet);
+    }
+
     // Try to add icon, but continue even if it fails
     const runtime = getChromeRuntime();
     if (runtime) {
         try {
             const iconImg = document.createElement('img');
-            iconImg.src = runtime.getURL('raicon20x20.png');
-            iconImg.alt = 'ResponseAble';
+            iconImg.src = runtime.getURL('xrepl256light.png');
+            iconImg.alt = 'xRepl.ai';
             // Platform-specific icon sizing
             if (platform === 'linkedin') {
                 iconImg.style.cssText = 'width: 16px !important; height: 16px !important; max-width: 16px !important; max-height: 16px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
             } else {
                 iconImg.style.cssText = 'width: 20px !important; height: 20px !important; max-width: 28px !important; max-height: 28px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
             }
-            iconImg.addEventListener('error', () => console.error('Failed to load raicon20x20.png from:', iconImg.src));
+            iconImg.addEventListener('error', () => console.error('Failed to load xrepl256light.png from:', iconImg.src));
             generateButton.appendChild(iconImg);
         } catch (error) {
             console.error('Error loading icon:', error);
@@ -3977,13 +4024,17 @@ const showStreamingOverlay = (initialText = '') => {
     `;
     overlay.appendChild(style);
     
+    // Get icon URL for streaming overlay
+    const streamingRuntime = getChromeRuntime();
+    const streamingIconUrl = streamingRuntime ? streamingRuntime.getURL('xrepl256light.png') : '';
+    
     overlay.innerHTML += `
         <div style="flex-shrink: 0;">
             <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;">
-                <span style="display: inline-block; width: 24px; height: 24px; border: 3px solid #1a73e8; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></span>
+                <img src="${streamingIconUrl}" alt="xRepl.ai" style="width: 24px; height: 24px; animation: responseable-pulse 1.5s ease-in-out infinite;" onerror="this.style.display='none'">
                 xRepl.ai - Generating Drafts...
             </h2>
-            <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+            <style>@keyframes responseable-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } }</style>
         </div>
         <div class="responseable-drafts-scroll" style="flex: 1; overflow-y: auto; margin: 16px 0; padding-right: 8px;">
             <div class="responseable-streaming-content" style="font-size: 14px; line-height: 1.6; color: #202124; white-space: pre-wrap; font-family: inherit;">
@@ -4329,7 +4380,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
 
     overlay.innerHTML = `
     <div style="flex-shrink: 0;">
-      <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> Able to Respond Better</h2>
+      <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> xRepl.ai - Smart Replies, Instantly</h2>
       ${isNewEmail ? '' : (selectedPackageNames ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : '')}
       ${newEmailDropdownHtml}
       ${!isNewEmail && matchedTypeInfo ? `<p style="color:#5f6368; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}
@@ -4373,13 +4424,13 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     const iconContainer = overlay.querySelector('#responseable-overlay-icon');
     if (iconContainer && runtime) {
         try {
-            const iconUrl = runtime.getURL('raicon20x20.png');
+            const iconUrl = runtime.getURL('xrepl256light.png');
             const iconImg = document.createElement('img');
             iconImg.src = iconUrl;
-            iconImg.alt = 'ResponseAble';
+            iconImg.alt = 'xRepl.ai';
             iconImg.style.cssText = 'width: 24px !important; height: 24px !important; display: inline-block !important; vertical-align: middle !important; object-fit: contain !important; flex-shrink: 0 !important;';
             iconImg.addEventListener('error', (e) => {
-                console.error('Failed to load raicon20x20.png in overlay from:', iconImg.src);
+                console.error('Failed to load xrepl256light.png in overlay from:', iconImg.src);
                 iconImg.style.display = 'none';
             });
             iconContainer.appendChild(iconImg);
