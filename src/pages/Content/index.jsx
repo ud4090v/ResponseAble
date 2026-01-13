@@ -68,6 +68,92 @@ const callProxyAPI = async (provider, model, messages, temperature = 0.8, max_to
     }
 };
 
+// Helper function to make streaming API calls through Vercel proxy
+// Returns an async generator that yields content chunks as they arrive
+const callProxyAPIStream = async (provider, model, messages, temperature = 0.8, max_tokens = 1000, onChunk = null, abortSignal = null) => {
+    const response = await fetch(VERCEL_PROXY_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            provider: provider,
+            model: model,
+            messages: messages,
+            temperature: temperature,
+            max_tokens: max_tokens,
+            stream: true
+        }),
+        signal: abortSignal
+    });
+
+    if (!response.ok) {
+        let errorData = {};
+        try {
+            errorData = await response.json();
+        } catch (e) {
+            errorData = { error: { message: response.statusText } };
+        }
+        const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+        throw new Error(errorMessage);
+    }
+
+    // Read the stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = '';
+    let buffer = '';
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            
+            if (done) {
+                break;
+            }
+
+            // Decode the chunk
+            buffer += decoder.decode(value, { stream: true });
+            
+            // Process complete SSE frames (lines ending with \n\n)
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line in buffer
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const data = line.slice(6);
+                    
+                    if (data === '[DONE]') {
+                        continue;
+                    }
+                    
+                    try {
+                        const parsed = JSON.parse(data);
+                        const content = parsed.choices?.[0]?.delta?.content || '';
+                        
+                        if (content) {
+                            fullContent += content;
+                            if (onChunk) {
+                                onChunk(fullContent, content);
+                            }
+                        }
+                    } catch (e) {
+                        // Skip malformed JSON chunks
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            // Request was cancelled, return what we have
+            return fullContent;
+        }
+        throw error;
+    }
+
+    return fullContent;
+};
+
 // Load API configuration from storage
 const loadApiConfig = async () => {
     return new Promise((resolve) => {
@@ -496,28 +582,48 @@ Return ONLY valid JSON, no other text.`;
     }
 };
 
+// OPTIMIZATION: Helper function to truncate text to reduce token count
+const truncateText = (text, maxChars = 2000) => {
+    if (!text || text.length <= maxChars) return text;
+    // Truncate and add indicator
+    return text.substring(0, maxChars) + '\n...[truncated for brevity]';
+};
+
+// OPTIMIZATION: Helper function to create compact package description for prompts
+const getCompactPackageInfo = (pkg) => {
+    // Only include essential fields to reduce tokens
+    return `${pkg.name}: ${pkg.description}`;
+};
+
 // Email classification function - uses AI to classify email type and extract entities
 const classifyEmail = async (richContext, sourceMessageText, platform, threadHistory = '', senderName = null) => {
     try {
         await loadApiConfig();
 
-        // Extract and analyze user's writing style from thread
-        const userEmails = extractUserEmails(platform, richContext);
+        // Load cached style profile immediately (non-blocking)
         let currentStyleProfile = await loadStyleProfile();
 
+        // OPTIMIZATION: Defer style analysis to run in background (not on critical path)
+        // Extract user emails for background analysis
+        const userEmails = extractUserEmails(platform, richContext);
+        
+        // Start style analysis in background (don't await - fire and forget)
+        // This will update the cached profile for future requests
         if (userEmails.length > 0) {
-            // Analyze style from current thread
-            const newStyleObservations = await analyzeWritingStyle(userEmails, platform);
-            if (newStyleObservations) {
-                // Merge with existing profile (fine-tuning)
-                currentStyleProfile = mergeStyleProfile(currentStyleProfile, newStyleObservations);
-                // Save updated profile
+            // Run style analysis asynchronously without blocking classification
+            (async () => {
                 try {
-                    await saveStyleProfile(currentStyleProfile);
-                } catch (saveError) {
-                    console.warn('Failed to save style profile:', saveError);
+                    const newStyleObservations = await analyzeWritingStyle(userEmails, platform);
+                    if (newStyleObservations) {
+                        // Merge with existing profile (fine-tuning)
+                        const updatedProfile = mergeStyleProfile(currentStyleProfile, newStyleObservations);
+                        // Save updated profile for future use
+                        await saveStyleProfile(updatedProfile);
+                    }
+                } catch (styleError) {
+                    console.warn('Background style analysis failed:', styleError);
                 }
-            }
+            })();
         }
 
         // Use cheaper/faster models for classification
@@ -531,47 +637,20 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         // Get user-selected packages from storage (defaults to base package if none selected)
         const userPackages = await getUserPackages();
 
-        // Format packages as string for type determination prompt
-        const typesWithContext = userPackages.map(p =>
-            `${p.name}: "${p.description}" (intent: ${p.intent}, roleDescription: ${p.roleDescription}, contextSpecific: ${p.contextSpecific})`
-        ).join(', ');
+        // OPTIMIZATION: Format packages compactly for type determination (reduces tokens)
+        // Only include name and description - full details are retrieved after type is matched
+        const typesWithContext = userPackages.map(p => getCompactPackageInfo(p)).join('\n');
 
         // Step 1: Determine email type based on packages
         // CRITICAL: This determines the type based on the SPECIFIC email being replied to, NOT the overall thread
-        const typeDeterminationPrompt = `The user has access to the following specialized packages:
-
+        // OPTIMIZATION: Simplified prompt to reduce tokens while maintaining accuracy
+        const typeDeterminationPrompt = `Available packages:
 ${typesWithContext}
 
-Analyze the provided email context and determine which package it best fits.
+Classify the email into one of the packages above. Return JSON:
+{"matched_type":{"name":"package_name","description":"...","intent":"...","roleDescription":"...","contextSpecific":"..."},"confidence":0.0-1.0,"reason":"brief explanation"}
 
-CRITICAL CONTEXT HANDLING:
-- You will receive TWO sections: "EMAIL BEING REPLIED TO" and optionally "PREVIOUS THREAD HISTORY"
-- The "EMAIL BEING REPLIED TO" is the SPECIFIC email the user clicked "Reply" on - this could be ANY email in the thread, not necessarily the latest
-- The thread history is ONLY for understanding the broader conversation context - DO NOT use it to determine the type
-
-CLASSIFICATION RULES:
-- Determine the type based SOLELY on what the sender is asking/doing in the "EMAIL BEING REPLIED TO" section
-- The thread history should NEVER override the specific email's classification
-
-Return ONLY a valid JSON object with exactly this structure:
-{
-  "matched_type": {
-    "name": string,                 // the package name (e.g., "sales")
-    "description": string,          // full description from the package
-    "intent": string,               // full intent from the package
-    "roleDescription": string,      // full roleDescription from the package
-    "contextSpecific": string       // full contextSpecific from the package
-  },
-  "confidence": number (0.0 to 1.0), // how strong the match is
-  "reason": string                  // brief explanation - must reference the SPECIFIC email being replied to
-}
-
-Rules:
-- CRITICAL: You MUST only choose from the packages listed above. Do NOT return a package name that is not in the list.
-- If the email doesn't clearly match any of the listed packages, return the base package (the one with base: true, if available in the list above).
-- Return the COMPLETE matched_type object including name, description, intent, roleDescription, and contextSpecific from the matched package.
-- Be precise and use both description and intent to guide your decision.
-- PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO - ignore thread history for type determination.`;
+Rules: Only use packages listed. If unclear, use base package. Focus on the specific email content, not thread history.`;
 
         // Extract the actual email being replied to and thread history separately
         // sourceMessageText is the ACTUAL email being replied to (not latest, but the specific one)
@@ -3817,14 +3896,24 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
             }
         ];
 
-        let data;
+        let draftsText;
         try {
-            data = await callProxyAPI(
+            // Use streaming API for draft generation - provides faster time-to-first-token
+            draftsText = await callProxyAPIStream(
                 apiConfig.provider,
                 apiConfig.model,
                 messages,
                 0.8,  // temperature
-                800   // max_tokens
+                800,  // max_tokens
+                // onChunk callback - called with each new chunk of content
+                (fullContent, newChunk) => {
+                    // Call onComplete with partial content for incremental UI updates
+                    // The overlay will re-render with the partial content
+                    if (onComplete) {
+                        onComplete(fullContent, true); // true = isPartial
+                    }
+                },
+                null  // abortSignal - could be added for cancellation support
             );
         } catch (fetchError) {
             // Handle network errors (CORS, connection issues, etc.)
@@ -3837,26 +3926,126 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
             throw fetchError;
         }
 
-        if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
-            console.error('Unexpected API response structure:', data);
-            throw new Error(`Invalid response format from ${apiConfig.provider} API`);
+        if (!draftsText || draftsText.trim().length === 0) {
+            console.error('Empty response from streaming API');
+            throw new Error(`Empty response from ${apiConfig.provider} API`);
         }
 
-        if (!data.choices[0].message || !data.choices[0].message.content) {
-            console.error('Unexpected message structure:', data.choices[0]);
-            throw new Error('Invalid message structure in API response');
-        }
-        const draftsText = data.choices[0].message.content;
-
-        onComplete(draftsText);
+        // Final call with complete content
+        onComplete(draftsText, false); // false = not partial, this is the final content
     } catch (err) {
         console.error('Error generating drafts:', err);
         throw err;
     }
 };
 
-const showDraftsOverlay = async (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null, newEmailParams = null) => {
-    // Remove existing overlay
+// Create a streaming overlay that shows content as it arrives
+const showStreamingOverlay = (initialText = '') => {
+    // Remove any existing overlay
+    document.querySelector('.responseable-overlay')?.remove();
+    
+    const overlay = document.createElement('div');
+    overlay.className = 'responseable-overlay responseable-streaming';
+    overlay.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 80%;
+        max-width: 800px;
+        max-height: 90vh;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+        z-index: 2147483647;
+        padding: 24px;
+        font-family: Google Sans,Roboto,sans-serif;
+        display: flex;
+        flex-direction: column;
+    `;
+    
+    // Add CSS animation for typing cursor
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes responseable-blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        .responseable-typing-cursor {
+            animation: responseable-blink 1s infinite;
+        }
+    `;
+    overlay.appendChild(style);
+    
+    overlay.innerHTML += `
+        <div style="flex-shrink: 0;">
+            <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;">
+                <span style="display: inline-block; width: 24px; height: 24px; border: 3px solid #1a73e8; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></span>
+                Generating Drafts...
+            </h2>
+            <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+        </div>
+        <div class="responseable-drafts-scroll" style="flex: 1; overflow-y: auto; margin: 16px 0; padding-right: 8px;">
+            <div class="responseable-streaming-content" style="font-size: 14px; line-height: 1.6; color: #202124; white-space: pre-wrap; font-family: inherit;">
+                ${initialText ? initialText.replace(/</g, '&lt;').replace(/>/g, '&gt;') : '<span style="color: #5f6368;">Waiting for response...</span>'}
+            </div>
+        </div>
+        <div style="flex-shrink: 0; display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #dadce0;">
+            <button class="responseable-close-btn" style="padding: 10px 24px; background: #f1f3f4; color: #5f6368; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Cancel</button>
+        </div>
+    `;
+    
+    document.body.appendChild(overlay);
+    
+    // Add close button handler
+    overlay.querySelector('.responseable-close-btn').addEventListener('click', () => {
+        overlay.remove();
+    });
+    
+    // Close on escape key
+    const escHandler = (e) => {
+        if (e.key === 'Escape') {
+            overlay.remove();
+            document.removeEventListener('keydown', escHandler);
+        }
+    };
+    document.addEventListener('keydown', escHandler);
+    
+    return overlay;
+};
+
+// Update streaming overlay content
+const updateStreamingOverlay = (content) => {
+    const overlay = document.querySelector('.responseable-overlay.responseable-streaming');
+    if (!overlay) return false;
+    
+    const streamingContent = overlay.querySelector('.responseable-streaming-content');
+    if (streamingContent) {
+        const displayText = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        streamingContent.innerHTML = `${displayText}<span class="responseable-typing-cursor" style="display: inline-block; width: 2px; height: 1em; background: #1a73e8; margin-left: 2px;"></span>`;
+        
+        // Scroll to bottom
+        const scrollContainer = overlay.querySelector('.responseable-drafts-scroll');
+        if (scrollContainer) {
+            scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        }
+    }
+    return true;
+};
+
+const showDraftsOverlay = async (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null, newEmailParams = null, isPartial = false) => {
+    // For partial (streaming) updates, just update the streaming content
+    if (isPartial) {
+        // If streaming overlay exists, update it
+        if (updateStreamingOverlay(draftsText)) {
+            return;
+        }
+        // Otherwise create a new streaming overlay
+        showStreamingOverlay(draftsText);
+        return;
+    }
+    
+    // Remove existing overlay for final render (including streaming overlay)
     document.querySelector('.responseable-overlay')?.remove();
 
     const adapter = customAdapter || platformAdapters[platform];
