@@ -2443,20 +2443,40 @@ const updateButtonText = (button, newText) => {
         }
     }
 
-    // Apply fade-in and bounce animation for status updates
+    // Apply slow fade-in for status updates with animated dots
     if (isStatusUpdate) {
+        // Extract the word (Analyzing or Generating) without the dots
+        const word = newText.replace('...', '');
+        
+        // Create HTML with word + animated dots
+        textSpan.innerHTML = '';
         textSpan.style.opacity = '0';
-        textSpan.textContent = newText;
-        textSpan.style.transition = 'opacity 0.3s ease-in';
-        textSpan.style.animation = 'responseable-text-bounce 0.6s ease-in-out infinite';
-        textSpan.style.display = 'inline-block';
+        textSpan.style.transition = 'opacity 0.8s ease-in';
+        textSpan.style.display = 'inline-flex';
+        textSpan.style.alignItems = 'baseline';
+        
+        // Add the word
+        const wordSpan = document.createElement('span');
+        wordSpan.textContent = word;
+        textSpan.appendChild(wordSpan);
+        
+        // Add animated dots with wave effect
+        for (let i = 0; i < 3; i++) {
+            const dot = document.createElement('span');
+            dot.textContent = '.';
+            dot.style.display = 'inline-block';
+            dot.style.animation = `responseable-dot-wave 1.2s ease-in-out infinite`;
+            dot.style.animationDelay = `${i * 0.15}s`;
+            textSpan.appendChild(dot);
+        }
+        
         requestAnimationFrame(() => {
             textSpan.style.opacity = '1';
         });
     } else {
         textSpan.style.transition = 'none';
         textSpan.style.opacity = '1';
-        textSpan.style.animation = 'none';
+        textSpan.innerHTML = '';
         textSpan.textContent = newText;
     }
 };
@@ -2471,18 +2491,16 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
         styleSheet.id = 'responseable-button-animations';
         styleSheet.textContent = `
             @keyframes responseable-icon-pulse {
-                0%, 100% { transform: scale(1) rotate(0deg); }
-                25% { transform: scale(1.15) rotate(-5deg); }
-                50% { transform: scale(1.2) rotate(0deg); }
-                75% { transform: scale(1.15) rotate(5deg); }
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.2); }
             }
             @keyframes responseable-button-glow {
                 0%, 100% { box-shadow: 0 0 5px rgba(85, 103, 185, 0.3); }
                 50% { box-shadow: 0 0 15px rgba(85, 103, 185, 0.6); }
             }
-            @keyframes responseable-text-bounce {
-                0%, 100% { transform: translateY(0); }
-                50% { transform: translateY(-2px); }
+            @keyframes responseable-dot-wave {
+                0%, 60%, 100% { transform: translateY(0); }
+                30% { transform: translateY(-4px); }
             }
         `;
         document.head.appendChild(styleSheet);
