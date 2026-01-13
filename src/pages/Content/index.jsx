@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
 import ALL_PACKAGES_DATA from '../../config/packages.json';
 import SUBSCRIPTION_PLANS_DATA from '../../config/subscriptionPlans.json';
+import { trackDraftGenerated, trackDraftInserted, trackThumbsUp, trackThumbsDown } from './metrics.js';
 
 // Ensure chrome API is available
 const getChromeRuntime = () => {
@@ -24,6 +25,7 @@ let apiConfig = {
     numGoals: 3,
     numTones: 3,
     classificationConfidenceThreshold: 0.85,
+    enableStyleMimicking: true,
 };
 
 // Fixed separator for parsing response variants - must match what we instruct AI to use
@@ -163,11 +165,12 @@ const loadApiConfig = async () => {
             resolve(apiConfig);
             return;
         }
-        storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'numGoals', 'numTones', 'classificationConfidenceThreshold'], (result) => {
+        storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'numGoals', 'numTones', 'classificationConfidenceThreshold', 'enableStyleMimicking'], (result) => {
             const numVariants = result.numVariants || 4;
             const numGoals = result.numGoals || 3;
             const numTones = result.numTones || 3;
             const confidenceThreshold = result.classificationConfidenceThreshold !== undefined ? result.classificationConfidenceThreshold : 0.85;
+            const enableStyleMimicking = result.enableStyleMimicking !== undefined ? result.enableStyleMimicking : true;
             apiConfig = {
                 provider: result.apiProvider || 'grok',
                 model: result.apiModel || 'grok-4-latest',
@@ -175,6 +178,7 @@ const loadApiConfig = async () => {
                 numGoals: Math.max(1, Math.min(5, numGoals)), // Clamp between 1 and 5
                 numTones: Math.max(1, Math.min(5, numTones)), // Clamp between 1 and 5
                 classificationConfidenceThreshold: Math.max(0.0, Math.min(1.0, confidenceThreshold)), // Clamp between 0.0 and 1.0
+                enableStyleMimicking: enableStyleMimicking,
             };
             resolve(apiConfig);
         });
@@ -188,7 +192,7 @@ loadApiConfig();
 const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
 if (storage) {
     storage.onChanged.addListener((changes) => {
-        if (changes.apiProvider || changes.apiModel || changes.numVariants || changes.numGoals || changes.numTones || changes.classificationConfidenceThreshold) {
+        if (changes.apiProvider || changes.apiModel || changes.numVariants || changes.numGoals || changes.numTones || changes.classificationConfidenceThreshold || changes.enableStyleMimicking) {
             loadApiConfig();
         }
     });
@@ -600,30 +604,36 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
     try {
         await loadApiConfig();
 
-        // Load cached style profile immediately (non-blocking)
-        let currentStyleProfile = await loadStyleProfile();
+        // Load cached style profile only if style mimicking is enabled
+        let currentStyleProfile = null;
+        if (apiConfig.enableStyleMimicking) {
+            currentStyleProfile = await loadStyleProfile();
 
-        // OPTIMIZATION: Defer style analysis to run in background (not on critical path)
-        // Extract user emails for background analysis
-        const userEmails = extractUserEmails(platform, richContext);
+            // OPTIMIZATION: Defer style analysis to run in background (not on critical path)
+            // Extract user emails for background analysis
+            const userEmails = extractUserEmails(platform, richContext);
 
-        // Start style analysis in background (don't await - fire and forget)
-        // This will update the cached profile for future requests
-        if (userEmails.length > 0) {
-            // Run style analysis asynchronously without blocking classification
-            (async () => {
-                try {
-                    const newStyleObservations = await analyzeWritingStyle(userEmails, platform);
-                    if (newStyleObservations) {
-                        // Merge with existing profile (fine-tuning)
-                        const updatedProfile = mergeStyleProfile(currentStyleProfile, newStyleObservations);
-                        // Save updated profile for future use
-                        await saveStyleProfile(updatedProfile);
+            // Start style analysis in background (don't await - fire and forget)
+            // This will update the cached profile for future requests
+            if (userEmails.length > 0) {
+                // Run style analysis asynchronously without blocking classification
+                (async () => {
+                    try {
+                        const newStyleObservations = await analyzeWritingStyle(userEmails, platform);
+                        if (newStyleObservations) {
+                            // Merge with existing profile (fine-tuning)
+                            const updatedProfile = mergeStyleProfile(currentStyleProfile, newStyleObservations);
+                            // Save updated profile for future use
+                            await saveStyleProfile(updatedProfile);
+                        }
+                    } catch (styleError) {
+                        console.warn('Background style analysis failed:', styleError);
                     }
-                } catch (styleError) {
-                    console.warn('Background style analysis failed:', styleError);
-                }
-            })();
+                })();
+            }
+        } else {
+            // If style mimicking is disabled, use default profile (won't be used in prompts anyway)
+            currentStyleProfile = defaultStyleProfile;
         }
 
         // Use cheaper/faster models for classification
@@ -1456,8 +1466,10 @@ ${previousThreadHistory ? `=== FULL THREAD HISTORY (for tone/dynamic analysis) =
             stack: error?.stack
         }, null, 2));
         // Return safe defaults
-        // Load style profile for fallback
-        const fallbackStyleProfile = await loadStyleProfile().catch(() => defaultStyleProfile);
+        // Load style profile for fallback only if style mimicking is enabled
+        const fallbackStyleProfile = apiConfig.enableStyleMimicking
+            ? await loadStyleProfile().catch(() => defaultStyleProfile)
+            : defaultStyleProfile;
         return {
             type: 'other',
             intent: 'general inquiry',
@@ -2447,19 +2459,19 @@ const updateButtonText = (button, newText) => {
     if (isStatusUpdate) {
         // Extract the word (Analyzing or Generating) without the dots
         const word = newText.replace('...', '');
-        
+
         // Create HTML with word + animated dots
         textSpan.innerHTML = '';
         textSpan.style.opacity = '0';
         textSpan.style.transition = 'opacity 0.8s ease-in';
         textSpan.style.display = 'inline-flex';
         textSpan.style.alignItems = 'baseline';
-        
+
         // Add the word
         const wordSpan = document.createElement('span');
         wordSpan.textContent = word;
         textSpan.appendChild(wordSpan);
-        
+
         // Add animated dots with wave effect
         for (let i = 0; i < 3; i++) {
             const dot = document.createElement('span');
@@ -2469,7 +2481,7 @@ const updateButtonText = (button, newText) => {
             dot.style.animationDelay = `${i * 0.15}s`;
             textSpan.appendChild(dot);
         }
-        
+
         requestAnimationFrame(() => {
             textSpan.style.opacity = '1';
         });
@@ -3634,8 +3646,9 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
             const isNewEmail = classification.isNewEmail === true;
 
             // Build style matching instructions from writing_style profile
+            // Only include style instructions if enableStyleMimicking is enabled
             let styleInstructions = '';
-            if (classification.writing_style && classification.writing_style.sample_count > 0) {
+            if (apiConfig.enableStyleMimicking && classification.writing_style && classification.writing_style.sample_count > 0) {
                 const style = classification.writing_style;
                 const greetingExamples = style.greeting_patterns && style.greeting_patterns.length > 0
                     ? ` Use greetings similar to: ${style.greeting_patterns.slice(0, 2).join(', ')}.`
@@ -3827,8 +3840,9 @@ Best regards,`;
             : "";
 
         // Build style matching instructions for LinkedIn
+        // Only include style instructions if enableStyleMimicking is enabled
         let linkedinStyleInstructions = '';
-        if (classification.writing_style && classification.writing_style.sample_count > 0) {
+        if (apiConfig.enableStyleMimicking && classification.writing_style && classification.writing_style.sample_count > 0) {
             const style = classification.writing_style;
             const greetingExamples = style.greeting_patterns && style.greeting_patterns.length > 0
                 ? ` Use greetings similar to: ${style.greeting_patterns.slice(0, 2).join(', ')}.`
@@ -4122,10 +4136,10 @@ const formatStreamingContent = (content) => {
     const formattedParts = parts.map((part, index) => {
         const variantNum = index + 1;
         const body = part.trim();
-        
+
         // Variant label on its own line, styled with blue color
         const variantLabel = `<div style="color: #5567b9; font-weight: bold; margin-bottom: 8px;">Variant ${variantNum}</div>`;
-        
+
         if (index === 0) {
             // First variant - no separator before it
             return `${variantLabel}${body}`;
@@ -4168,6 +4182,10 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
         showStreamingOverlay(draftsText);
         return;
     }
+
+    // Track draft generation (only for final, non-streaming overlays)
+    const roleName = classification?.type || 'generic';
+    trackDraftGenerated(roleName).catch(err => console.warn('Failed to track draft generation:', err));
 
     // Remove existing overlay for final render (including streaming overlay)
     document.querySelector('.responseable-overlay')?.remove();
@@ -4442,6 +4460,17 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
       Generating drafts...
     </div>
     <div style="flex-shrink: 0; margin-top: 16px; padding-top: 16px; border-top: 1px solid #dadce0;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 12px; color: #5f6368;">Was this helpful?</span>
+          <button id="responseable-thumbs-up" style="padding: 6px 10px; background: transparent; border: 1px solid #dadce0; border-radius: 4px; cursor: pointer; font-size: 16px; color: #5f6368; transition: all 0.2s;" title="Thumbs up">
+            👍
+          </button>
+          <button id="responseable-thumbs-down" style="padding: 6px 10px; background: transparent; border: 1px solid #dadce0; border-radius: 4px; cursor: pointer; font-size: 16px; color: #5f6368; transition: all 0.2s;" title="Thumbs down">
+            👎
+          </button>
+        </div>
+      </div>
       <button id="responseable-close-button" style="width: 100%; padding:10px 16px; background:#1a73e8; color:white; border:none; border-radius:4px; cursor:pointer; font-size: 14px; font-weight: 500;">
         Close
       </button>
@@ -4585,6 +4614,8 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                 const draftText = draftOption.getAttribute('data-draft-text');
                 if (draftText && adapterEl) {
                     adapterEl.insertText(draftText);
+                    // Track draft insertion
+                    trackDraftInserted().catch(err => console.warn('Failed to track draft insertion:', err));
                     overlayEl.remove();
                 }
             });
@@ -4593,6 +4624,38 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
 
     // Attach initial draft click handlers
     attachDraftClickHandlers(overlay, adapter);
+
+    // Add thumbs up/down button handlers
+    const thumbsUpBtn = overlay.querySelector('#responseable-thumbs-up');
+    const thumbsDownBtn = overlay.querySelector('#responseable-thumbs-down');
+
+    if (thumbsUpBtn) {
+        thumbsUpBtn.addEventListener('click', () => {
+            trackThumbsUp().catch(err => console.warn('Failed to track thumbs up:', err));
+            thumbsUpBtn.style.background = '#e8f0fe';
+            thumbsUpBtn.style.borderColor = '#1a73e8';
+            thumbsUpBtn.style.color = '#1a73e8';
+            thumbsUpBtn.disabled = true;
+            if (thumbsDownBtn) {
+                thumbsDownBtn.disabled = true;
+                thumbsDownBtn.style.opacity = '0.5';
+            }
+        });
+    }
+
+    if (thumbsDownBtn) {
+        thumbsDownBtn.addEventListener('click', () => {
+            trackThumbsDown().catch(err => console.warn('Failed to track thumbs down:', err));
+            thumbsDownBtn.style.background = '#fce8e6';
+            thumbsDownBtn.style.borderColor = '#d93025';
+            thumbsDownBtn.style.color = '#d93025';
+            thumbsDownBtn.disabled = true;
+            if (thumbsUpBtn) {
+                thumbsUpBtn.disabled = true;
+                thumbsUpBtn.style.opacity = '0.5';
+            }
+        });
+    }
 
     // Tone selector change handler - regenerate variants with new tone for current goal
     // Works for both replies (regenerateContext) and new emails (newEmailParams)
@@ -4733,6 +4796,8 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                 draftText = textarea.value;
             }
             adapter.insertText(draftText);
+            // Track draft insertion
+            trackDraftInserted().catch(err => console.warn('Failed to track draft insertion:', err));
             overlay.remove();
         });
     });

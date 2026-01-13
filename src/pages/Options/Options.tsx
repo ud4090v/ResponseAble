@@ -14,6 +14,7 @@ interface ApiConfig {
   numGoals: number;
   numTones: number;
   classificationConfidenceThreshold: number;
+  enableStyleMimicking: boolean;
 }
 
 interface Package {
@@ -39,6 +40,7 @@ interface SubscriptionPlan {
   };
   contentPackagesAllowed: boolean;
   allContent: boolean;
+  styleMimickingEnabled: boolean;
 }
 
 // Master list of all available packages - imported from shared config
@@ -67,15 +69,25 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     numGoals: 3,
     numTones: 3,
     classificationConfidenceThreshold: 0.85,
+    enableStyleMimicking: true,
   });
   const [selectedPackages, setSelectedPackages] = useState<string[]>(['generic']);
   const [defaultRole, setDefaultRole] = useState<string>('generic');
   const [subscriptionPlan, setSubscriptionPlan] = useState<string>('free');
   const [saved, setSaved] = useState(false);
+  const [iconUrl, setIconUrl] = useState<string>('');
 
   useEffect(() => {
+    // Get icon URL
+    try {
+      const url = chrome.runtime.getURL('xrepl-light.png');
+      setIconUrl(url);
+    } catch (error) {
+      console.error('Failed to get icon URL:', error);
+    }
+
     // Load saved settings
-    chrome.storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'numGoals', 'numTones', 'classificationConfidenceThreshold', 'selectedPackages', 'defaultRole', 'subscriptionPlan'], (result) => {
+    chrome.storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'numGoals', 'numTones', 'classificationConfidenceThreshold', 'enableStyleMimicking', 'selectedPackages', 'defaultRole', 'subscriptionPlan'], (result) => {
       // Load subscription plan, default to 'free' if not set
       const loadedPlan = result.subscriptionPlan && typeof result.subscriptionPlan === 'string' ? result.subscriptionPlan : 'free';
       setSubscriptionPlan(loadedPlan);
@@ -87,6 +99,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         numGoals: result.numGoals || 3,
         numTones: result.numTones || 3,
         classificationConfidenceThreshold: result.classificationConfidenceThreshold !== undefined ? result.classificationConfidenceThreshold : 0.85,
+        enableStyleMimicking: result.enableStyleMimicking !== undefined ? result.enableStyleMimicking : true,
       });
       // Load selected packages, default to ['generic'] if none selected
       if (result.selectedPackages && Array.isArray(result.selectedPackages) && result.selectedPackages.length > 0) {
@@ -264,6 +277,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         numGoals: validatedNumGoals,
         numTones: validatedNumTones,
         classificationConfidenceThreshold: validatedConfidenceThreshold,
+        enableStyleMimicking: config.enableStyleMimicking,
         selectedPackages: packagesToSave,
         defaultRole: validatedDefaultRole,
         subscriptionPlan: subscriptionPlan,
@@ -295,7 +309,19 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   return (
     <div className="OptionsContainer">
       <div className="OptionsContent">
-        <h1>{title}</h1>
+        <h1 style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+          {iconUrl && (
+            <img 
+              src={iconUrl} 
+              alt="xRepl.ai" 
+              style={{ width: '32px', height: '32px', objectFit: 'contain' }}
+            />
+          )}
+          <span>
+            <span style={{ color: '#5567b9', fontWeight: '600' }}>xRepl.ai</span>
+            <span> - Settings</span>
+          </span>
+        </h1>
 
         {/* Tabs */}
         <div className="TabsContainer">
@@ -476,6 +502,45 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 </div>
                 <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
                   If classification confidence is below this threshold, the system will use Generic package. Higher values = stricter matching (0.0-1.0, default: 0.85)
+                </p>
+              </div>
+
+              {/* Style Mimicking Toggle - Show for all plans, but disabled for Free/Basic */}
+              <div className="SettingGroup">
+                <label htmlFor="style-mimicking" style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: currentPlan?.styleMimickingEnabled ? 'pointer' : 'not-allowed' }}>
+                  <input
+                    id="style-mimicking"
+                    type="checkbox"
+                    checked={config.enableStyleMimicking}
+                    onChange={(e) => {
+                      if (currentPlan?.styleMimickingEnabled) {
+                        setConfig({ ...config, enableStyleMimicking: e.target.checked });
+                      }
+                    }}
+                    disabled={!currentPlan?.styleMimickingEnabled}
+                    style={{ 
+                      width: '18px', 
+                      height: '18px', 
+                      cursor: currentPlan?.styleMimickingEnabled ? 'pointer' : 'not-allowed',
+                      opacity: currentPlan?.styleMimickingEnabled ? 1 : 0.5
+                    }}
+                  />
+                  <span style={{ opacity: currentPlan?.styleMimickingEnabled ? 1 : 0.6 }}>
+                    Enable User Style Mimicking
+                    {!currentPlan?.styleMimickingEnabled && (
+                      <span style={{ marginLeft: '8px', fontSize: '12px', color: '#ea4335', fontWeight: 'normal' }}>
+                        (Pro/Ultimate only)
+                      </span>
+                    )}
+                  </span>
+                </label>
+                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368', marginLeft: '30px' }}>
+                  When enabled, the extension analyzes your writing style from previous emails and matches it in generated drafts.
+                  {!currentPlan?.styleMimickingEnabled && (
+                    <span style={{ display: 'block', marginTop: '4px', color: '#ea4335', fontWeight: '500' }}>
+                      Upgrade to Pro or Ultimate plan to enable this feature.
+                    </span>
+                  )}
                 </p>
               </div>
             </div>

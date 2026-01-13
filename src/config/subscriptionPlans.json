@@ -15,7 +15,8 @@
             ]
         },
         "contentPackagesAllowed": false,
-        "allContent": false
+        "allContent": false,
+        "styleMimickingEnabled": false
     },
     {
         "name": "basic",
@@ -36,7 +37,8 @@
             ]
         },
         "contentPackagesAllowed": false,
-        "allContent": false
+        "allContent": false,
+        "styleMimickingEnabled": false
     },
     {
         "name": "pro",
@@ -65,7 +67,8 @@
             ]
         },
         "contentPackagesAllowed": true,
-        "allContent": false
+        "allContent": false,
+        "styleMimickingEnabled": true
     },
     {
         "name": "ultimate",
@@ -94,6 +97,7 @@
             ]
         },
         "contentPackagesAllowed": true,
-        "allContent": true
+        "allContent": true,
+        "styleMimickingEnabled": true
     }
 ]
