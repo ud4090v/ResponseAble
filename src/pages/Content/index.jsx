@@ -4030,7 +4030,7 @@ const showStreamingOverlay = (initialText = '') => {
 
     overlay.innerHTML += `
         <div style="flex-shrink: 0;">
-            <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;">
+            <h2 style="margin-top:0; color:#9b9fa8; display: flex; align-items: center; gap: 8px;">
                 <img src="${streamingIconUrl}" alt="xRepl.ai" style="width: 24px; height: 24px; animation: responseable-pulse 1.5s ease-in-out infinite;" onerror="this.style.display='none'">
                 xRepl.ai - Generating Drafts...
             </h2>
@@ -4080,29 +4080,20 @@ const formatStreamingContent = (content) => {
     }
 
     // Format each variant with a label and horizontal separator
+    // Keep the full body including greeting - don't extract title from content
     const formattedParts = parts.map((part, index) => {
         const variantNum = index + 1;
-        // Try to extract a title from the first line if it looks like a title
-        const lines = part.trim().split('\n');
-        let title = '';
-        let body = part.trim();
-
-        // Check if first line could be a title (short, no punctuation at end except colon)
-        if (lines.length > 1 && lines[0].length < 50 && !lines[0].match(/[.!?]$/)) {
-            title = lines[0].replace(/:$/, '').trim();
-            body = lines.slice(1).join('\n').trim();
-        }
-
-        const variantLabel = title
-            ? `<strong style="color: #1a73e8;">Variant ${variantNum} - ${title}</strong>`
-            : `<strong style="color: #1a73e8;">Variant ${variantNum}</strong>`;
-
+        const body = part.trim();
+        
+        // Variant label on its own line, styled with blue color
+        const variantLabel = `<div style="color: #5567b9; font-weight: bold; margin-bottom: 8px;">Variant ${variantNum}</div>`;
+        
         if (index === 0) {
             // First variant - no separator before it
-            return `${variantLabel}\n${body}`;
+            return `${variantLabel}${body}`;
         } else {
             // Add horizontal separator before subsequent variants
-            return `<hr style="border: none; border-top: 1px solid #dadce0; margin: 16px 0;">${variantLabel}\n${body}`;
+            return `<hr style="border: none; border-top: 1px solid #dadce0; margin: 16px 0;">${variantLabel}${body}`;
         }
     });
 
@@ -4380,7 +4371,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
 
     overlay.innerHTML = `
     <div style="flex-shrink: 0;">
-      <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> xRepl.ai - Smart Replies, Instantly</h2>
+      <h2 style="margin-top:0; color:#5567b9; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> xRepl.ai - Smart Replies, Instantly</h2>
       ${isNewEmail ? '' : (selectedPackageNames ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : '')}
       ${newEmailDropdownHtml}
       ${!isNewEmail && matchedTypeInfo ? `<p style="color:#5f6368; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}
