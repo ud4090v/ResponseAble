@@ -2857,8 +2857,8 @@ Rules:
                     recipientName,
                     recipientCompany,
                     adapter,
-                    async (draftsText) => {
-                        await showDraftsOverlay(draftsText, context, platform, null, classification, regenerateContext);
+                    async (draftsText, isPartial = false) => {
+                        await showDraftsOverlay(draftsText, context, platform, null, classification, regenerateContext, null, isPartial);
                     },
                     regenerateContext  // Pass regenerateContext so function can access threadHistory
                 );
