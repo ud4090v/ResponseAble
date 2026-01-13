@@ -107,30 +107,30 @@ const callProxyAPIStream = async (provider, model, messages, temperature = 0.8, 
     try {
         while (true) {
             const { done, value } = await reader.read();
-            
+
             if (done) {
                 break;
             }
 
             // Decode the chunk
             buffer += decoder.decode(value, { stream: true });
-            
+
             // Process complete SSE frames (lines ending with \n\n)
             const lines = buffer.split('\n');
             buffer = lines.pop() || ''; // Keep incomplete line in buffer
-            
+
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
                     const data = line.slice(6);
-                    
+
                     if (data === '[DONE]') {
                         continue;
                     }
-                    
+
                     try {
                         const parsed = JSON.parse(data);
                         const content = parsed.choices?.[0]?.delta?.content || '';
-                        
+
                         if (content) {
                             fullContent += content;
                             if (onChunk) {
@@ -606,7 +606,7 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         // OPTIMIZATION: Defer style analysis to run in background (not on critical path)
         // Extract user emails for background analysis
         const userEmails = extractUserEmails(platform, richContext);
-        
+
         // Start style analysis in background (don't await - fire and forget)
         // This will update the cached profile for future requests
         if (userEmails.length > 0) {
@@ -2408,7 +2408,7 @@ const createIconOnlyButton = (buttonTooltip, platform) => {
 const updateButtonText = (button, newText) => {
     // Check if this is a status update (Analyzing/Generating) to apply animations
     const isStatusUpdate = newText === 'Analyzing...' || newText === 'Generating...';
-    
+
     // Find the icon and apply pulsating animation during status updates
     const iconImg = button.querySelector('img');
     if (iconImg) {
@@ -2418,7 +2418,7 @@ const updateButtonText = (button, newText) => {
             iconImg.style.animation = 'none';
         }
     }
-    
+
     // Find the text span or create one
     let textSpan = button.querySelector('.responseable-button-text');
     if (!textSpan) {
@@ -2435,7 +2435,7 @@ const updateButtonText = (button, newText) => {
             button.appendChild(textSpan);
         }
     }
-    
+
     // Apply fade-in animation for status updates
     if (isStatusUpdate) {
         textSpan.style.opacity = '0';
@@ -2473,7 +2473,7 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
     if (runtime) {
         try {
             const iconImg = document.createElement('img');
-            iconImg.src = runtime.getURL('xrepl256light.png');
+            iconImg.src = runtime.getURL('xrepl-dark.png');
             iconImg.alt = 'xRepl.ai';
             // Platform-specific icon sizing
             if (platform === 'linkedin') {
@@ -2481,7 +2481,7 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
             } else {
                 iconImg.style.cssText = 'width: 20px !important; height: 20px !important; max-width: 28px !important; max-height: 28px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
             }
-            iconImg.addEventListener('error', () => console.error('Failed to load xrepl256light.png from:', iconImg.src));
+            iconImg.addEventListener('error', () => console.error('Failed to load xrepl-dark.png from:', iconImg.src));
             generateButton.appendChild(iconImg);
         } catch (error) {
             console.error('Error loading icon:', error);
@@ -3990,7 +3990,7 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
 const showStreamingOverlay = (initialText = '') => {
     // Remove any existing overlay
     document.querySelector('.responseable-overlay')?.remove();
-    
+
     const overlay = document.createElement('div');
     overlay.className = 'responseable-overlay responseable-streaming';
     overlay.style.cssText = `
@@ -4010,7 +4010,7 @@ const showStreamingOverlay = (initialText = '') => {
         display: flex;
         flex-direction: column;
     `;
-    
+
     // Add CSS animation for typing cursor
     const style = document.createElement('style');
     style.textContent = `
@@ -4023,11 +4023,11 @@ const showStreamingOverlay = (initialText = '') => {
         }
     `;
     overlay.appendChild(style);
-    
+
     // Get icon URL for streaming overlay
     const streamingRuntime = getChromeRuntime();
-    const streamingIconUrl = streamingRuntime ? streamingRuntime.getURL('xrepl256light.png') : '';
-    
+    const streamingIconUrl = streamingRuntime ? streamingRuntime.getURL('xrepl-light.png') : '';
+
     overlay.innerHTML += `
         <div style="flex-shrink: 0;">
             <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;">
@@ -4045,14 +4045,14 @@ const showStreamingOverlay = (initialText = '') => {
             <button class="responseable-close-btn" style="padding: 10px 24px; background: #f1f3f4; color: #5f6368; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Cancel</button>
         </div>
     `;
-    
+
     document.body.appendChild(overlay);
-    
+
     // Add close button handler
     overlay.querySelector('.responseable-close-btn').addEventListener('click', () => {
         overlay.remove();
     });
-    
+
     // Close on escape key
     const escHandler = (e) => {
         if (e.key === 'Escape') {
@@ -4061,7 +4061,7 @@ const showStreamingOverlay = (initialText = '') => {
         }
     };
     document.addEventListener('keydown', escHandler);
-    
+
     return overlay;
 };
 
@@ -4069,16 +4069,16 @@ const showStreamingOverlay = (initialText = '') => {
 const formatStreamingContent = (content) => {
     // Escape HTML
     let displayText = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    
+
     // Split by the variant separator
     const separator = '|||RESPONSE_VARIANT|||';
     const parts = displayText.split(separator);
-    
+
     if (parts.length <= 1) {
         // No separators yet, just return the content as-is
         return displayText;
     }
-    
+
     // Format each variant with a label and horizontal separator
     const formattedParts = parts.map((part, index) => {
         const variantNum = index + 1;
@@ -4086,17 +4086,17 @@ const formatStreamingContent = (content) => {
         const lines = part.trim().split('\n');
         let title = '';
         let body = part.trim();
-        
+
         // Check if first line could be a title (short, no punctuation at end except colon)
         if (lines.length > 1 && lines[0].length < 50 && !lines[0].match(/[.!?]$/)) {
             title = lines[0].replace(/:$/, '').trim();
             body = lines.slice(1).join('\n').trim();
         }
-        
-        const variantLabel = title 
+
+        const variantLabel = title
             ? `<strong style="color: #1a73e8;">Variant ${variantNum} - ${title}</strong>`
             : `<strong style="color: #1a73e8;">Variant ${variantNum}</strong>`;
-        
+
         if (index === 0) {
             // First variant - no separator before it
             return `${variantLabel}\n${body}`;
@@ -4105,7 +4105,7 @@ const formatStreamingContent = (content) => {
             return `<hr style="border: none; border-top: 1px solid #dadce0; margin: 16px 0;">${variantLabel}\n${body}`;
         }
     });
-    
+
     return formattedParts.join('');
 };
 
@@ -4113,12 +4113,12 @@ const formatStreamingContent = (content) => {
 const updateStreamingOverlay = (content) => {
     const overlay = document.querySelector('.responseable-overlay.responseable-streaming');
     if (!overlay) return false;
-    
+
     const streamingContent = overlay.querySelector('.responseable-streaming-content');
     if (streamingContent) {
         const formattedContent = formatStreamingContent(content);
         streamingContent.innerHTML = `${formattedContent}<span class="responseable-typing-cursor" style="display: inline-block; width: 2px; height: 1em; background: #1a73e8; margin-left: 2px;"></span>`;
-        
+
         // Scroll to bottom
         const scrollContainer = overlay.querySelector('.responseable-drafts-scroll');
         if (scrollContainer) {
@@ -4139,7 +4139,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
         showStreamingOverlay(draftsText);
         return;
     }
-    
+
     // Remove existing overlay for final render (including streaming overlay)
     document.querySelector('.responseable-overlay')?.remove();
 
@@ -4424,13 +4424,13 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     const iconContainer = overlay.querySelector('#responseable-overlay-icon');
     if (iconContainer && runtime) {
         try {
-            const iconUrl = runtime.getURL('xrepl256light.png');
+            const iconUrl = runtime.getURL('xrepl-light.png');
             const iconImg = document.createElement('img');
             iconImg.src = iconUrl;
             iconImg.alt = 'xRepl.ai';
             iconImg.style.cssText = 'width: 24px !important; height: 24px !important; display: inline-block !important; vertical-align: middle !important; object-fit: contain !important; flex-shrink: 0 !important;';
             iconImg.addEventListener('error', (e) => {
-                console.error('Failed to load xrepl256light.png in overlay from:', iconImg.src);
+                console.error('Failed to load xrepl-light.png in overlay from:', iconImg.src);
                 iconImg.style.display = 'none';
             });
             iconContainer.appendChild(iconImg);
