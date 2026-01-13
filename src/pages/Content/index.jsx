@@ -1581,13 +1581,116 @@ const platformAdapters = {
         findSubjectField: () => {
             return document.querySelector('input[aria-label="Subject"]');
         },
-        // Check if reply or new message
-        isReply: () => {
+        // Multi-factor detection: Check if compose action is Reply, Forward, or New Email
+        // Priority: Attribution line > Content patterns > DOM structure > Subject line
+        detectComposeAction: () => {
+            const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
+            if (!composeBody) return 'new';
+
+            const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') ||
+                composeBody.closest('form') ||
+                composeBody.parentElement?.parentElement?.parentElement;
+
+            // PRIORITY 1: Check attribution line (most reliable for replies)
+            if (composeContainer) {
+                const gmailAttr = composeContainer.querySelector('.gmail_attr');
+                if (gmailAttr) {
+                    const attrText = gmailAttr.innerText || gmailAttr.textContent || '';
+                    // "wrote:" is the key indicator of a reply
+                    if (/wrote:/i.test(attrText)) {
+                        return 'reply';
+                    }
+                }
+
+                // Check for attribution as sibling of quoted content
+                const quotedContent = composeContainer.querySelector('div.gmail_quote, blockquote.gmail_quote, blockquote');
+                if (quotedContent) {
+                    const attrLine = quotedContent.previousElementSibling;
+                    if (attrLine) {
+                        const attrText = attrLine.innerText || attrLine.textContent || '';
+                        if (/wrote:/i.test(attrText)) {
+                            return 'reply';
+                        }
+                        if (/Forwarded message|Original Message/i.test(attrText)) {
+                            return 'forward';
+                        }
+                    }
+                }
+            }
+
+            // PRIORITY 2: Check content patterns in compose body
+            const composeText = composeBody.innerText || composeBody.textContent || '';
+
+            // Check for Forward patterns (more specific, check first)
+            const forwardPatterns = [
+                /-{3,}\s*Forwarded message\s*-{3,}/i,
+                /Begin forwarded message:/i,
+                /^From:\s+.+\n(Sent|Date):\s+/im,
+                /^Original Message\s*-+/im,
+                /From:\s+.+\nSent:\s+/i,
+                /From:\s+.+\nDate:\s+/i
+            ];
+
+            for (const pattern of forwardPatterns) {
+                if (pattern.test(composeText)) {
+                    return 'forward';
+                }
+            }
+
+            // Check for Reply patterns
+            const replyPatterns = [
+                /On\s+.+?,\s+.+?\s*<[^>]+>\s*wrote:/i,  // "On date, name <email> wrote:"
+                /On\s+.+?,\s+.+?\s+wrote:/i             // "On date, name wrote:"
+            ];
+
+            for (const pattern of replyPatterns) {
+                if (pattern.test(composeText)) {
+                    return 'reply';
+                }
+            }
+
+            // PRIORITY 3: Check DOM structure
+            if (composeContainer) {
+                const quotedContent = composeContainer.querySelector('div.gmail_quote, blockquote');
+                if (quotedContent) {
+                    const quoteText = quotedContent.innerText || quotedContent.textContent || '';
+                    // Check if it looks like a forward (has forward headers but no "wrote:")
+                    if (/Forwarded message|Original Message|From:\s+.+\n(Sent|Date):/i.test(quoteText) &&
+                        !/wrote:/i.test(quoteText)) {
+                        return 'forward';
+                    }
+                    // If it has "wrote:" it's likely a reply
+                    if (/wrote:/i.test(quoteText)) {
+                        return 'reply';
+                    }
+                }
+            }
+
+            // PRIORITY 4: Fallback to subject line (least reliable)
             const subjectField = document.querySelector('input[aria-label="Subject"]');
             const subjectValue = subjectField?.value || '';
-            const allMessageDivs = Array.from(document.querySelectorAll('div[aria-label="Message Body"]'))
-                .filter(div => div.getAttribute('role') !== 'textbox');
-            return allMessageDivs.length > 0 || subjectValue.toLowerCase().startsWith('re:');
+
+            // Check forward first (more specific)
+            if (/fwd?:/i.test(subjectValue)) {
+                return 'forward';
+            }
+
+            // Then check reply
+            if (subjectValue.toLowerCase().startsWith('re:')) {
+                return 'reply';
+            }
+
+            return 'new';
+        },
+        // Check if reply or new message (legacy method, kept for backward compatibility)
+        isReply: () => {
+            const action = platformAdapters.gmail.detectComposeAction();
+            return action === 'reply';
+        },
+        // Check if forward
+        isForward: () => {
+            const action = platformAdapters.gmail.detectComposeAction();
+            return action === 'forward';
         },
         // Get the ACTUAL email being replied to (not the latest, but the specific one the user clicked "Reply" on)
         // CRITICAL FIX: Gmail uses different selectors for thread messages vs compose box
@@ -2303,11 +2406,57 @@ const platformAdapters = {
         },
         // No subject field in LinkedIn
         findSubjectField: () => null,
-        // Check if reply or new message
-        isReply: () => {
-            // Check if there are existing messages in the conversation
+        // Multi-factor detection: Check if compose action is Reply, Forward, or New Email
+        // LinkedIn messaging is simpler - mostly conversation-based
+        detectComposeAction: () => {
+            const composeInput = platformAdapters.linkedin.findComposeInput();
+            if (!composeInput) return 'new';
+
+            const composeText = composeInput.innerText || composeInput.textContent || '';
+
+            // Check for Forward patterns in content (LinkedIn rarely has forwards, but check anyway)
+            const forwardPatterns = [
+                /-{3,}\s*Forwarded message\s*-{3,}/i,
+                /Begin forwarded message:/i,
+                /^From:\s+.+\n(Sent|Date):\s+/im,
+                /^Original Message\s*-+/im
+            ];
+
+            for (const pattern of forwardPatterns) {
+                if (pattern.test(composeText)) {
+                    return 'forward';
+                }
+            }
+
+            // Check for Reply patterns
+            const replyPatterns = [
+                /On\s+.+?,\s+.+?\s*<[^>]+>\s*wrote:/i,
+                /On\s+.+?,\s+.+?\s+wrote:/i
+            ];
+
+            for (const pattern of replyPatterns) {
+                if (pattern.test(composeText)) {
+                    return 'reply';
+                }
+            }
+
+            // Check if there are existing messages in the conversation (indicates reply)
             const existingMessages = document.querySelectorAll('.msg-s-message-list__message, .msg-s-event-listitem, .msg-s-message-listitem');
-            return existingMessages.length > 0;
+            if (existingMessages.length > 0) {
+                return 'reply';
+            }
+
+            return 'new';
+        },
+        // Check if reply or new message (legacy method, kept for backward compatibility)
+        isReply: () => {
+            const action = platformAdapters.linkedin.detectComposeAction();
+            return action === 'reply';
+        },
+        // Check if forward
+        isForward: () => {
+            const action = platformAdapters.linkedin.detectComposeAction();
+            return action === 'forward';
         },
         // Get thread messages for context
         getThreadMessages: () => {
@@ -2590,8 +2739,23 @@ const injectGenerateButton = () => {
             // Get context for API call using enhanced context extraction
             const richContext = getRichContext();
 
-            // CRITICAL: Get detailed information about the email being replied to
-            // Call getRepliedToEmailDetails first to determine if this is a reply
+            // Use multi-factor detection to determine compose action type
+            let composeAction = 'new';
+            if (adapter.detectComposeAction) {
+                composeAction = adapter.detectComposeAction();
+            } else {
+                // Fallback to old method if detectComposeAction not available
+                if (adapter.isReply && adapter.isReply()) {
+                    composeAction = 'reply';
+                } else if (adapter.isForward && adapter.isForward()) {
+                    composeAction = 'forward';
+                }
+            }
+
+            const isReply = composeAction === 'reply';
+            const isForward = composeAction === 'forward';
+
+            // CRITICAL: Get detailed information about the email being replied to (only for replies)
             let emailDetails = null;
             let sourceMessageText = '';
             let actualSenderName = null;
@@ -2599,33 +2763,54 @@ const injectGenerateButton = () => {
             let emailSubject = '';
             let toRecipients = '';
             let ccRecipients = '';
-            let isReply = false;
+            let forwardedMessageContent = ''; // For forwards
 
-            if (adapter.getRepliedToEmailDetails) {
+            if (isReply && adapter.getRepliedToEmailDetails) {
                 emailDetails = adapter.getRepliedToEmailDetails();
                 if (emailDetails) {
-                    // Determine if it's a reply based on whether we got meaningful data
-                    // A reply should have either a senderName or a body (quoted content)
-                    isReply = !!(emailDetails.senderName || emailDetails.body);
+                    sourceMessageText = emailDetails.body || '';
+                    actualSenderName = emailDetails.senderName || null;
+                    actualSenderEmail = emailDetails.senderEmail || null;
+                    emailSubject = emailDetails.subject || '';
+                    toRecipients = emailDetails.to || '';
+                    ccRecipients = emailDetails.cc || '';
+                }
+            } else if (isForward) {
+                // Extract forwarded message content (treat as context, not source)
+                const composeBody = adapter.findComposeInput();
+                if (composeBody) {
+                    const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') ||
+                        composeBody.closest('form') ||
+                        composeBody.parentElement?.parentElement?.parentElement;
 
-                    if (isReply) {
-                        sourceMessageText = emailDetails.body || '';
-                        actualSenderName = emailDetails.senderName || null;
-                        actualSenderEmail = emailDetails.senderEmail || null;
-                        emailSubject = emailDetails.subject || '';
-                        toRecipients = emailDetails.to || '';
-                        ccRecipients = emailDetails.cc || '';
+                    if (composeContainer) {
+                        // Look for forwarded content
+                        const quotedContent = composeContainer.querySelector('div.gmail_quote, blockquote.gmail_quote, blockquote');
+                        if (quotedContent) {
+                            // Clone and strip nested quotes
+                            const clonedQuote = quotedContent.cloneNode(true);
+                            const nestedQuotes = clonedQuote.querySelectorAll('div.gmail_quote, blockquote.gmail_quote, blockquote');
+                            nestedQuotes.forEach(nested => nested.remove());
+                            forwardedMessageContent = clonedQuote.innerText?.trim() || clonedQuote.textContent?.trim() || '';
+                        } else {
+                            // Fallback: extract from compose text directly
+                            const composeText = composeBody.innerText || composeBody.textContent || '';
+                            // Try to extract forwarded message (everything after forward header)
+                            const forwardMatch = composeText.match(/(?:-{3,}\s*Forwarded message\s*-{3,}|Begin forwarded message:)([\s\S]*)/i);
+                            if (forwardMatch) {
+                                forwardedMessageContent = forwardMatch[1].trim();
+                            }
+                        }
                     }
                 }
             }
 
-            // Fallback: if getRepliedToEmailDetails didn't work or didn't detect a reply, use isReply() method
-            if (!isReply && adapter.isReply) {
-                isReply = adapter.isReply();
-            }
-
-            // Update button text and class based on whether it's a reply
-            if (isReply) {
+            // Update button text and class based on compose action
+            if (isForward) {
+                updateButtonText(generateButton, 'Forward');
+                generateButton.className = 'responseable-forward responseable-button' + (platform === 'linkedin' ? ' responseable-linkedin-button' : '');
+                generateButton.setAttribute('data-tooltip', 'Generate AI forward message drafts');
+            } else if (isReply) {
                 updateButtonText(generateButton, 'Respond');
                 generateButton.className = 'responseable-respond responseable-button' + (platform === 'linkedin' ? ' responseable-linkedin-button' : '');
                 generateButton.setAttribute('data-tooltip', 'Generate AI response options');
@@ -2673,10 +2858,11 @@ const injectGenerateButton = () => {
                 ? (actualSenderName || (adapter.getEmailBeingRepliedToSenderName ? adapter.getEmailBeingRepliedToSenderName() : (adapter.getLatestEmailSenderName ? adapter.getLatestEmailSenderName() : adapter.getSenderName()))) || recipientName
                 : null;
 
-            // Handle new email vs reply differently
-            if (!isReply) {
+            // Handle forward, new email, and reply differently
+            // Forward is treated as New Email with forwarded message as context
+            if (isForward || !isReply) {
                 // NEW EMAIL: Extract compose window content and generate drafts
-                updateButtonText(generateButton, 'Generating...');
+                updateButtonText(generateButton, 'Analyzing...');
                 generateButton.style.opacity = '0.7';
                 generateButton.disabled = true; // Disable button during generation
 
@@ -2690,17 +2876,48 @@ const injectGenerateButton = () => {
                 let composeRecipient = richContext.to || '';
 
                 // Get body text from compose window
+                // For forwards, exclude the forwarded message content (only get user's typed content)
                 if (platform === 'gmail') {
                     const composeBody = adapter.findComposeInput();
                     if (composeBody) {
-                        // Try to get text content from the compose body
-                        composeBodyText = composeBody.innerText || composeBody.textContent || '';
+                        let fullText = composeBody.innerText || composeBody.textContent || '';
+                        if (isForward && forwardedMessageContent) {
+                            // Remove forwarded message content to get only user's typed content
+                            // Find where forwarded content starts and remove it
+                            const forwardHeaderPattern = /(?:-{3,}\s*Forwarded message\s*-{3,}|Begin forwarded message:)/i;
+                            const forwardIndex = fullText.search(forwardHeaderPattern);
+                            if (forwardIndex !== -1) {
+                                composeBodyText = fullText.substring(0, forwardIndex).trim();
+                            } else {
+                                // Try to remove forwarded content by matching it
+                                const forwardedIndex = fullText.indexOf(forwardedMessageContent.substring(0, 50));
+                                if (forwardedIndex !== -1) {
+                                    composeBodyText = fullText.substring(0, forwardedIndex).trim();
+                                } else {
+                                    composeBodyText = fullText;
+                                }
+                            }
+                        } else {
+                            composeBodyText = fullText;
+                        }
                     }
                 } else if (platform === 'linkedin') {
                     // LinkedIn compose input
                     const composeInput = document.querySelector('.msg-form__contenteditable, .msg-form__texteditor');
                     if (composeInput) {
-                        composeBodyText = composeInput.innerText || composeInput.textContent || '';
+                        let fullText = composeInput.innerText || composeInput.textContent || '';
+                        if (isForward && forwardedMessageContent) {
+                            // Remove forwarded message content
+                            const forwardHeaderPattern = /(?:-{3,}\s*Forwarded message\s*-{3,}|Begin forwarded message:)/i;
+                            const forwardIndex = fullText.search(forwardHeaderPattern);
+                            if (forwardIndex !== -1) {
+                                composeBodyText = fullText.substring(0, forwardIndex).trim();
+                            } else {
+                                composeBodyText = fullText;
+                            }
+                        } else {
+                            composeBodyText = fullText;
+                        }
                     }
                 }
 
@@ -2752,7 +2969,8 @@ const injectGenerateButton = () => {
                         const classificationModel = apiConfig.classificationModel || apiConfig.model;
 
                         // Build context for type determination
-                        const composeContext = `${composeSubject ? `Subject: ${composeSubject}\n` : ''}${composeRecipient ? `To: ${composeRecipient}\n` : ''}${composeBodyText ? `\nEmail content:\n${composeBodyText}` : ''}`;
+                        // For forwards, only use user's typed content (forwarded message is ignored)
+                        let composeContext = `${composeSubject ? `Subject: ${composeSubject}\n` : ''}${composeRecipient ? `To: ${composeRecipient}\n` : ''}${composeBodyText ? `\nEmail content:\n${composeBodyText}` : ''}`;
 
                         // Determine type from typed content (for NEW EMAIL drafting)
                         // CRITICAL: This is for NEW EMAIL drafting, not reply classification
@@ -2844,6 +3062,9 @@ Rules:
                     }
                 }
 
+                // Switch to "Generating..." before starting draft generation
+                updateButtonText(generateButton, 'Generating...');
+
                 // Generate drafts
                 try {
                     if (shouldUseGenericSingleDraft) {
@@ -2858,23 +3079,8 @@ Rules:
                             recipientCompany,
                             adapter,
                             userAccountName,
-                            userAccountEmail
-                        );
-                    } else {
-                        // Use normal flow with determined/default role
-                        await generateDraftsForNewEmail(
-                            richContext,
-                            platform,
-                            selectedRole,
-                            actualRecipientName,
-                            recipientCompany,
-                            adapter,
-                            userAccountName,
                             userAccountEmail,
-                            composeSubject,
-                            composeBodyText,
-                            composeRecipient,
-                            async (draftsText, classification) => {
+                            async (draftsText, classificationOrPartial) => {
                                 // Create regenerateContext for new emails so tone selector works
                                 const newEmailRegenerateContext = {
                                     richContext: context,
@@ -2892,7 +3098,7 @@ Rules:
                                     userAccountEmail: userAccountEmail
                                 };
 
-                                await showDraftsOverlay(draftsText, context, platform, adapter, classification, newEmailRegenerateContext, {
+                                const newEmailParams = {
                                     isNewEmail: true,
                                     userPackages: userPackages,
                                     defaultRole: selectedRole,
@@ -2901,7 +3107,76 @@ Rules:
                                     userAccountName: userAccountName,
                                     userAccountEmail: userAccountEmail,
                                     skipAutoGenerate: true
-                                });
+                                };
+
+                                // Handle both streaming (isPartial=true) and final (classification object) cases
+                                if (typeof classificationOrPartial === 'boolean') {
+                                    // This is a streaming update (isPartial flag) - pass isPartial directly like Reply flow
+                                    await showDraftsOverlay(draftsText, context, platform, adapter, null, newEmailRegenerateContext, newEmailParams, classificationOrPartial);
+                                    return;
+                                }
+
+                                // This is the final call with classification object
+                                const classification = classificationOrPartial;
+
+                                await showDraftsOverlay(draftsText, context, platform, adapter, classification, newEmailRegenerateContext, newEmailParams);
+                            }
+                        );
+                    } else {
+                        // Use normal flow with determined/default role
+                        await generateDraftsForNewEmail(
+                            richContext,
+                            platform,
+                            selectedRole,
+                            actualRecipientName,
+                            recipientCompany,
+                            adapter,
+                            userAccountName,
+                            userAccountEmail,
+                            composeSubject,
+                            composeBodyText,
+                            composeRecipient,
+                            async (draftsText, classificationOrPartial) => {
+                                // Create regenerateContext for new emails so tone selector works
+                                const newEmailRegenerateContext = {
+                                    richContext: context,
+                                    sourceMessageText: '', // No source message for new emails
+                                    threadHistory: '', // No thread history for new emails
+                                    context: context,
+                                    senderName: userAccountName || '[Name]',
+                                    recipientName: actualRecipientName || '[Recipient]',
+                                    recipientCompany: recipientCompany || null,
+                                    composeSubject: composeSubject,
+                                    composeBodyText: composeBodyText,
+                                    composeRecipient: composeRecipient,
+                                    isNewEmail: true,
+                                    userAccountName: userAccountName,
+                                    userAccountEmail: userAccountEmail
+                                };
+
+                                const newEmailParams = {
+                                    isNewEmail: true,
+                                    userPackages: userPackages,
+                                    defaultRole: selectedRole,
+                                    recipientName: actualRecipientName,
+                                    recipientCompany: recipientCompany,
+                                    userAccountName: userAccountName,
+                                    userAccountEmail: userAccountEmail,
+                                    skipAutoGenerate: true
+                                };
+
+                                // Handle both streaming (isPartial=true) and final (classification object) cases
+                                // generateDraftsForNewEmail passes either isPartial (boolean) or classification (object)
+                                if (typeof classificationOrPartial === 'boolean') {
+                                    // This is a streaming update (isPartial flag) - pass isPartial directly like Reply flow
+                                    await showDraftsOverlay(draftsText, context, platform, adapter, null, newEmailRegenerateContext, newEmailParams, classificationOrPartial);
+                                    return;
+                                }
+
+                                // This is the final call with classification object
+                                const classification = classificationOrPartial;
+
+                                await showDraftsOverlay(draftsText, context, platform, adapter, classification, newEmailRegenerateContext, newEmailParams);
                             }
                         );
                     }
@@ -2989,7 +3264,7 @@ Rules:
 // Simple overlay to show drafts
 // Function to generate drafts with a specific tone
 // Generate single base package draft based on typed content (when type doesn't match user packages)
-const generateGenericSingleDraft = async (richContext, platform, subject, recipient, bodyText, recipientName, recipientCompany, adapter, userAccountName = '', userAccountEmail = '') => {
+const generateGenericSingleDraft = async (richContext, platform, subject, recipient, bodyText, recipientName, recipientCompany, adapter, userAccountName = '', userAccountEmail = '', onComplete = null) => {
     try {
         await loadApiConfig();
 
@@ -2997,8 +3272,8 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
         const userPackages = await getUserPackages();
         const genericPackage = userPackages.find(p => p.base); // getUserPackages() always includes base package
 
-        // Build context from typed content
-        const composeContext = `${subject ? `Subject: ${subject}\n` : ''}${recipient ? `To: ${recipient}\n` : ''}${bodyText ? `\nEmail content:\n${bodyText}` : ''}`;
+        // Build context from typed content only (forwarded messages are ignored)
+        let composeContext = `${subject ? `Subject: ${subject}\n` : ''}${recipient ? `To: ${recipient}\n` : ''}${bodyText ? `\nEmail content:\n${bodyText}` : ''}`;
 
         const recipientDisplay = recipientName || '[Recipient]';
         const recipientText = recipientName
@@ -3097,23 +3372,41 @@ ${userAccountName || '[Name]'}`;
             }
         ];
 
-        const data = await callProxyAPI(
-            apiConfig.provider,
-            apiConfig.model,
-            messages,
-            0.8,
-            800 * numVariants // Increase tokens for multiple variants
-        );
-
-        if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
-            throw new Error(`Invalid response format from ${apiConfig.provider} API`);
+        // Use streaming API for draft generation - provides faster time-to-first-token
+        let draftText;
+        try {
+            draftText = await callProxyAPIStream(
+                apiConfig.provider,
+                apiConfig.model,
+                messages,
+                0.8,  // temperature
+                800 * numVariants,  // max_tokens (increase for multiple variants)
+                // onChunk callback - called with each new chunk of content
+                (fullContent, newChunk) => {
+                    // Call onComplete with partial content for incremental UI updates
+                    if (onComplete) {
+                        onComplete(fullContent, true); // true = isPartial
+                    }
+                },
+                null  // abortSignal - could be added for cancellation support
+            );
+        } catch (fetchError) {
+            // Handle network errors (CORS, connection issues, etc.)
+            const networkError = fetchError.message || String(fetchError);
+            console.error('Network error during draft generation API call:', networkError);
+            if (networkError.includes('Failed to fetch') || networkError.includes('NetworkError')) {
+                throw new Error(`Network error: Unable to connect to ${apiConfig.provider} API. Please check:\n1. Your internet connection\n2. CORS settings (if testing locally)\n3. API endpoint is accessible\n\nError: ${networkError}`);
+            }
+            // Re-throw other errors (they're already formatted by callProxyAPI)
+            throw fetchError;
         }
 
-        if (!data.choices[0].message || !data.choices[0].message.content) {
-            throw new Error(`No content in response from ${apiConfig.provider} API`);
+        if (!draftText || draftText.trim().length === 0) {
+            console.error('Empty response from streaming API');
+            throw new Error(`Empty response from ${apiConfig.provider} API`);
         }
 
-        const draftText = data.choices[0].message.content.trim();
+        draftText = draftText.trim();
 
         // Parse drafts - split by fixed separator
         let draftBlocks = [];
@@ -3259,34 +3552,39 @@ Return ONLY valid JSON, no other text.`;
         // Join drafts with separator for showDraftsOverlay
         const draftsText = draftBlocks.join(RESPONSE_VARIANT_SEPARATOR);
 
-        // Create regenerateContext for generic new emails so tone selector works
-        const newEmailRegenerateContext = {
-            richContext: richContext,
-            sourceMessageText: '', // No source message for new emails
-            threadHistory: '', // No thread history for new emails
-            context: richContext,
-            senderName: userAccountName || '[Name]',
-            recipientName: recipientName || '[Recipient]',
-            recipientCompany: recipientCompany || null,
-            composeSubject: subject || '',
-            composeBodyText: bodyText || '',
-            composeRecipient: recipient || '',
-            isNewEmail: true,
-            userAccountName: userAccountName,
-            userAccountEmail: userAccountEmail
-        };
+        // Final call with complete content (if onComplete callback provided, it will handle the overlay)
+        if (onComplete) {
+            await onComplete(draftsText, classification);
+        } else {
+            // Fallback: show overlay directly if no callback provided
+            // Create regenerateContext for generic new emails so tone selector works
+            const newEmailRegenerateContext = {
+                richContext: richContext,
+                sourceMessageText: '', // No source message for new emails
+                threadHistory: '', // No thread history for new emails
+                context: richContext,
+                senderName: userAccountName || '[Name]',
+                recipientName: recipientName || '[Recipient]',
+                recipientCompany: recipientCompany || null,
+                composeSubject: subject || '',
+                composeBodyText: bodyText || '',
+                composeRecipient: recipient || '',
+                isNewEmail: true,
+                userAccountName: userAccountName,
+                userAccountEmail: userAccountEmail
+            };
 
-        // Show overlay with multiple draft variants
-        await showDraftsOverlay(draftsText, richContext, platform, adapter, classification, newEmailRegenerateContext, {
-            isNewEmail: true,
-            userPackages: userPackages,
-            defaultRole: genericPackage.name, // Use actual package name
-            recipientName: recipientName,
-            recipientCompany: recipientCompany,
-            userAccountName: userAccountName,
-            userAccountEmail: userAccountEmail,
-            skipAutoGenerate: true
-        });
+            await showDraftsOverlay(draftsText, richContext, platform, adapter, classification, newEmailRegenerateContext, {
+                isNewEmail: true,
+                userPackages: userPackages,
+                defaultRole: genericPackage.name, // Use actual package name
+                recipientName: recipientName,
+                recipientCompany: recipientCompany,
+                userAccountName: userAccountName,
+                userAccountEmail: userAccountEmail,
+                skipAutoGenerate: true
+            });
+        }
     } catch (error) {
         console.error('Error generating generic single draft:', error);
         throw error;
@@ -3322,7 +3620,7 @@ const generateDraftsForNewEmail = async (richContext, platform, selectedRole, re
         // ============================================================================
         // STEP 1: GOALS DETERMINATION BASED ON userIntent AND TYPED CONTENT (similar to intent/goals for replies)
         // ============================================================================
-        // Build context from typed content if available
+        // Build context from typed content if available (forwarded messages are ignored)
         const typedContentContext = (composeSubject || composeBodyText || composeRecipient)
             ? `\n\nTYPED EMAIL CONTENT (use this to inform goals and topics):
 Subject: ${composeSubject || '(not provided)'}
@@ -3580,10 +3878,20 @@ Return ONLY valid JSON, no other text.`;
             recipientName || '[Recipient]',
             recipientCompany || null,
             adapter,
-            async (draftsText) => {
+            async (draftsText, isPartial = false) => {
                 // Pass classification along with draftsText to onComplete
+                // Note: generateDraftsWithTone calls onComplete(draftsText, isPartial)
+                // so we need to handle isPartial and pass classification separately
                 if (onComplete) {
-                    await onComplete(draftsText, classification);
+                    // For partial updates, pass isPartial flag; for final, pass classification
+                    if (isPartial) {
+                        // For streaming updates, pass isPartial as boolean to indicate it's a partial update
+                        // The callback will handle this by calling showDraftsOverlay with isPartial=true
+                        await onComplete(draftsText, true); // Pass isPartial=true (boolean)
+                    } else {
+                        // For final update, pass classification object
+                        await onComplete(draftsText, classification); // Pass classification object
+                    }
                 }
             },
             null // No regenerateContext for new emails
@@ -3678,7 +3986,7 @@ Write in a way that sounds like YOU wrote it, matching your typical communicatio
                     ? ` at ${classification.recipient_company}`
                     : '';
 
-                // Include typed content if available
+                // Include typed content if available (forwarded messages are ignored)
                 const typedContentSection = (classification.composeSubject || classification.composeBodyText || classification.composeRecipient)
                     ? `\n\nTYPED EMAIL CONTENT (use this as the basis for your drafts):
 Subject: ${classification.composeSubject || '(not provided)'}

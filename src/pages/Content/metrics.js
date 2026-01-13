@@ -12,7 +12,7 @@ const getDefaultMetrics = () => {
     const now = new Date();
     const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    
+
     return {
         draftsGenerated: 0,
         draftsInserted: 0,
@@ -46,30 +46,30 @@ const checkAndResetCounters = async (metrics) => {
     const now = new Date();
     const currentWeekStart = getWeekStart();
     const currentMonthStart = getMonthStart();
-    
+
     const storedWeekStart = new Date(metrics.weekStart);
     const storedMonthStart = new Date(metrics.monthStart);
-    
+
     let needsUpdate = false;
-    
+
     // Reset weekly counter if new week
     if (currentWeekStart.getTime() !== storedWeekStart.getTime()) {
         metrics.draftsThisWeek = 0;
         metrics.weekStart = currentWeekStart.toISOString();
         needsUpdate = true;
     }
-    
+
     // Reset monthly counter if new month
     if (currentMonthStart.getTime() !== storedMonthStart.getTime()) {
         metrics.draftsThisMonth = 0;
         metrics.monthStart = currentMonthStart.toISOString();
         needsUpdate = true;
     }
-    
+
     if (needsUpdate) {
         await saveMetrics(metrics);
     }
-    
+
     return metrics;
 };
 
@@ -81,7 +81,7 @@ export const loadMetrics = async () => {
             resolve(getDefaultMetrics());
             return;
         }
-        
+
         storage.local.get(['metrics'], (result) => {
             const metrics = result.metrics || getDefaultMetrics();
             // Check and reset counters if needed
@@ -100,7 +100,7 @@ export const saveMetrics = async (metrics) => {
             reject(new Error('Storage API not available'));
             return;
         }
-        
+
         storage.local.set({ metrics }, () => {
             if (chrome?.runtime?.lastError) {
                 reject(chrome.runtime.lastError);
@@ -118,12 +118,12 @@ export const trackDraftGenerated = async (role = null) => {
         metrics.draftsGenerated += 1;
         metrics.draftsThisWeek += 1;
         metrics.draftsThisMonth += 1;
-        
+
         // Track role usage
         if (role) {
             metrics.roleUsage[role] = (metrics.roleUsage[role] || 0) + 1;
         }
-        
+
         await saveMetrics(metrics);
         return metrics;
     } catch (error) {
@@ -175,12 +175,12 @@ export const trackThumbsDown = async () => {
 export const getFormattedMetrics = async () => {
     try {
         const metrics = await loadMetrics();
-        
+
         // Calculate insert rate
         const insertRate = metrics.draftsGenerated > 0
             ? Math.round((metrics.draftsInserted / metrics.draftsGenerated) * 100)
             : 0;
-        
+
         // Calculate time saved (drafts inserted × 30 seconds)
         const totalSeconds = metrics.draftsInserted * 30;
         const hours = Math.floor(totalSeconds / 3600);
@@ -194,7 +194,7 @@ export const getFormattedMetrics = async () => {
         } else {
             timeSavedText = `~${minutes} minute${minutes > 1 ? 's' : ''}`;
         }
-        
+
         // Find most used role
         let mostUsedRole = null;
         let mostUsedRoleCount = 0;
@@ -209,13 +209,13 @@ export const getFormattedMetrics = async () => {
         const mostUsedRolePercentage = totalRoleUsage > 0
             ? Math.round((mostUsedRoleCount / totalRoleUsage) * 100)
             : 0;
-        
+
         // Calculate feedback score
         const totalFeedback = metrics.thumbsUp + metrics.thumbsDown;
         const feedbackScore = totalFeedback > 0
             ? Math.round((metrics.thumbsUp / totalFeedback) * 100)
             : 0;
-        
+
         return {
             draftsGenerated: metrics.draftsGenerated,
             draftsInserted: metrics.draftsInserted,
