@@ -197,7 +197,7 @@ var options = {
       patterns: [
         {
           from: 'src/assets/img/xrepl256blue.png',
-          to: path.join(__dirname, 'build', 'raicon20x20.png'),
+          to: path.join(__dirname, 'build', 'xrepl-dark.png'),
           force: true,
         },
       ],

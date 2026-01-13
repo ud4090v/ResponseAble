@@ -68,6 +68,92 @@ const callProxyAPI = async (provider, model, messages, temperature = 0.8, max_to
     }
 };
 
+// Helper function to make streaming API calls through Vercel proxy
+// Returns an async generator that yields content chunks as they arrive
+const callProxyAPIStream = async (provider, model, messages, temperature = 0.8, max_tokens = 1000, onChunk = null, abortSignal = null) => {
+    const response = await fetch(VERCEL_PROXY_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            provider: provider,
+            model: model,
+            messages: messages,
+            temperature: temperature,
+            max_tokens: max_tokens,
+            stream: true
+        }),
+        signal: abortSignal
+    });
+
+    if (!response.ok) {
+        let errorData = {};
+        try {
+            errorData = await response.json();
+        } catch (e) {
+            errorData = { error: { message: response.statusText } };
+        }
+        const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+        throw new Error(errorMessage);
+    }
+
+    // Read the stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = '';
+    let buffer = '';
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+
+            if (done) {
+                break;
+            }
+
+            // Decode the chunk
+            buffer += decoder.decode(value, { stream: true });
+
+            // Process complete SSE frames (lines ending with \n\n)
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const data = line.slice(6);
+
+                    if (data === '[DONE]') {
+                        continue;
+                    }
+
+                    try {
+                        const parsed = JSON.parse(data);
+                        const content = parsed.choices?.[0]?.delta?.content || '';
+
+                        if (content) {
+                            fullContent += content;
+                            if (onChunk) {
+                                onChunk(fullContent, content);
+                            }
+                        }
+                    } catch (e) {
+                        // Skip malformed JSON chunks
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            // Request was cancelled, return what we have
+            return fullContent;
+        }
+        throw error;
+    }
+
+    return fullContent;
+};
+
 // Load API configuration from storage
 const loadApiConfig = async () => {
     return new Promise((resolve) => {
@@ -496,28 +582,48 @@ Return ONLY valid JSON, no other text.`;
     }
 };
 
+// OPTIMIZATION: Helper function to truncate text to reduce token count
+const truncateText = (text, maxChars = 2000) => {
+    if (!text || text.length <= maxChars) return text;
+    // Truncate and add indicator
+    return text.substring(0, maxChars) + '\n...[truncated for brevity]';
+};
+
+// OPTIMIZATION: Helper function to create compact package description for prompts
+const getCompactPackageInfo = (pkg) => {
+    // Only include essential fields to reduce tokens
+    return `${pkg.name}: ${pkg.description}`;
+};
+
 // Email classification function - uses AI to classify email type and extract entities
 const classifyEmail = async (richContext, sourceMessageText, platform, threadHistory = '', senderName = null) => {
     try {
         await loadApiConfig();
 
-        // Extract and analyze user's writing style from thread
-        const userEmails = extractUserEmails(platform, richContext);
+        // Load cached style profile immediately (non-blocking)
         let currentStyleProfile = await loadStyleProfile();
 
+        // OPTIMIZATION: Defer style analysis to run in background (not on critical path)
+        // Extract user emails for background analysis
+        const userEmails = extractUserEmails(platform, richContext);
+
+        // Start style analysis in background (don't await - fire and forget)
+        // This will update the cached profile for future requests
         if (userEmails.length > 0) {
-            // Analyze style from current thread
-            const newStyleObservations = await analyzeWritingStyle(userEmails, platform);
-            if (newStyleObservations) {
-                // Merge with existing profile (fine-tuning)
-                currentStyleProfile = mergeStyleProfile(currentStyleProfile, newStyleObservations);
-                // Save updated profile
+            // Run style analysis asynchronously without blocking classification
+            (async () => {
                 try {
-                    await saveStyleProfile(currentStyleProfile);
-                } catch (saveError) {
-                    console.warn('Failed to save style profile:', saveError);
+                    const newStyleObservations = await analyzeWritingStyle(userEmails, platform);
+                    if (newStyleObservations) {
+                        // Merge with existing profile (fine-tuning)
+                        const updatedProfile = mergeStyleProfile(currentStyleProfile, newStyleObservations);
+                        // Save updated profile for future use
+                        await saveStyleProfile(updatedProfile);
+                    }
+                } catch (styleError) {
+                    console.warn('Background style analysis failed:', styleError);
                 }
-            }
+            })();
         }
 
         // Use cheaper/faster models for classification
@@ -531,47 +637,20 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         // Get user-selected packages from storage (defaults to base package if none selected)
         const userPackages = await getUserPackages();
 
-        // Format packages as string for type determination prompt
-        const typesWithContext = userPackages.map(p =>
-            `${p.name}: "${p.description}" (intent: ${p.intent}, roleDescription: ${p.roleDescription}, contextSpecific: ${p.contextSpecific})`
-        ).join(', ');
+        // OPTIMIZATION: Format packages compactly for type determination (reduces tokens)
+        // Only include name and description - full details are retrieved after type is matched
+        const typesWithContext = userPackages.map(p => getCompactPackageInfo(p)).join('\n');
 
         // Step 1: Determine email type based on packages
         // CRITICAL: This determines the type based on the SPECIFIC email being replied to, NOT the overall thread
-        const typeDeterminationPrompt = `The user has access to the following specialized packages:
-
+        // OPTIMIZATION: Simplified prompt to reduce tokens while maintaining accuracy
+        const typeDeterminationPrompt = `Available packages:
 ${typesWithContext}
 
-Analyze the provided email context and determine which package it best fits.
+Classify the email into one of the packages above. Return JSON:
+{"matched_type":{"name":"package_name","description":"...","intent":"...","roleDescription":"...","contextSpecific":"..."},"confidence":0.0-1.0,"reason":"brief explanation"}
 
-CRITICAL CONTEXT HANDLING:
-- You will receive TWO sections: "EMAIL BEING REPLIED TO" and optionally "PREVIOUS THREAD HISTORY"
-- The "EMAIL BEING REPLIED TO" is the SPECIFIC email the user clicked "Reply" on - this could be ANY email in the thread, not necessarily the latest
-- The thread history is ONLY for understanding the broader conversation context - DO NOT use it to determine the type
-
-CLASSIFICATION RULES:
-- Determine the type based SOLELY on what the sender is asking/doing in the "EMAIL BEING REPLIED TO" section
-- The thread history should NEVER override the specific email's classification
-
-Return ONLY a valid JSON object with exactly this structure:
-{
-  "matched_type": {
-    "name": string,                 // the package name (e.g., "sales")
-    "description": string,          // full description from the package
-    "intent": string,               // full intent from the package
-    "roleDescription": string,      // full roleDescription from the package
-    "contextSpecific": string       // full contextSpecific from the package
-  },
-  "confidence": number (0.0 to 1.0), // how strong the match is
-  "reason": string                  // brief explanation - must reference the SPECIFIC email being replied to
-}
-
-Rules:
-- CRITICAL: You MUST only choose from the packages listed above. Do NOT return a package name that is not in the list.
-- If the email doesn't clearly match any of the listed packages, return the base package (the one with base: true, if available in the list above).
-- Return the COMPLETE matched_type object including name, description, intent, roleDescription, and contextSpecific from the matched package.
-- Be precise and use both description and intent to guide your decision.
-- PRIORITIZE the SPECIFIC EMAIL BEING REPLIED TO - ignore thread history for type determination.`;
+Rules: Only use packages listed. If unclear, use base package. Focus on the specific email content, not thread history.`;
 
         // Extract the actual email being replied to and thread history separately
         // sourceMessageText is the ACTUAL email being replied to (not latest, but the specific one)
@@ -2325,16 +2404,80 @@ const createIconOnlyButton = (buttonTooltip, platform) => {
 };
 
 // Create button with icon
-// Helper function to update button text while preserving icon
+// Helper function to update button text while preserving icon, with fade-in animation
 const updateButtonText = (button, newText) => {
-    // Find the text node (should be the last child after the icon)
-    const textNodes = Array.from(button.childNodes).filter(node => node.nodeType === Node.TEXT_NODE);
-    if (textNodes.length > 0) {
-        // Update the last text node (the button text)
-        textNodes[textNodes.length - 1].textContent = newText;
+    // Check if this is a status update (Analyzing/Generating) to apply animations
+    const isStatusUpdate = newText === 'Analyzing...' || newText === 'Generating...';
+
+    // Find the icon and apply pulsating animation during status updates
+    const iconImg = button.querySelector('img');
+    if (iconImg) {
+        if (isStatusUpdate) {
+            iconImg.style.animation = 'responseable-icon-pulse 0.8s ease-in-out infinite';
+        } else {
+            iconImg.style.animation = 'none';
+        }
+    }
+
+    // Apply button glow animation during status updates
+    if (isStatusUpdate) {
+        button.style.animation = 'responseable-button-glow 1.5s ease-in-out infinite';
     } else {
-        // If no text node exists, append one
-        button.appendChild(document.createTextNode(newText));
+        button.style.animation = 'none';
+    }
+
+    // Find the text span or create one
+    let textSpan = button.querySelector('.responseable-button-text');
+    if (!textSpan) {
+        // Convert existing text node to span for animation support
+        const textNodes = Array.from(button.childNodes).filter(node => node.nodeType === Node.TEXT_NODE);
+        if (textNodes.length > 0) {
+            textSpan = document.createElement('span');
+            textSpan.className = 'responseable-button-text';
+            textSpan.textContent = textNodes[textNodes.length - 1].textContent;
+            textNodes[textNodes.length - 1].replaceWith(textSpan);
+        } else {
+            textSpan = document.createElement('span');
+            textSpan.className = 'responseable-button-text';
+            button.appendChild(textSpan);
+        }
+    }
+
+    // Apply slow fade-in for status updates with animated dots
+    if (isStatusUpdate) {
+        // Extract the word (Analyzing or Generating) without the dots
+        const word = newText.replace('...', '');
+        
+        // Create HTML with word + animated dots
+        textSpan.innerHTML = '';
+        textSpan.style.opacity = '0';
+        textSpan.style.transition = 'opacity 0.8s ease-in';
+        textSpan.style.display = 'inline-flex';
+        textSpan.style.alignItems = 'baseline';
+        
+        // Add the word
+        const wordSpan = document.createElement('span');
+        wordSpan.textContent = word;
+        textSpan.appendChild(wordSpan);
+        
+        // Add animated dots with wave effect
+        for (let i = 0; i < 3; i++) {
+            const dot = document.createElement('span');
+            dot.textContent = '.';
+            dot.style.display = 'inline-block';
+            dot.style.animation = `responseable-dot-wave 1.2s ease-in-out infinite`;
+            dot.style.animationDelay = `${i * 0.15}s`;
+            textSpan.appendChild(dot);
+        }
+        
+        requestAnimationFrame(() => {
+            textSpan.style.opacity = '1';
+        });
+    } else {
+        textSpan.style.transition = 'none';
+        textSpan.style.opacity = '1';
+        textSpan.innerHTML = '';
+        textSpan.textContent = newText;
     }
 };
 
@@ -2342,20 +2485,41 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
     const generateButton = document.createElement('button');
     generateButton.type = 'button';
 
+    // Inject CSS keyframes for icon pulse animation (only once)
+    if (!document.querySelector('#responseable-button-animations')) {
+        const styleSheet = document.createElement('style');
+        styleSheet.id = 'responseable-button-animations';
+        styleSheet.textContent = `
+            @keyframes responseable-icon-pulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.2); }
+            }
+            @keyframes responseable-button-glow {
+                0%, 100% { box-shadow: 0 0 5px rgba(85, 103, 185, 0.3); }
+                50% { box-shadow: 0 0 15px rgba(85, 103, 185, 0.6); }
+            }
+            @keyframes responseable-dot-wave {
+                0%, 60%, 100% { transform: translateY(0); }
+                30% { transform: translateY(-4px); }
+            }
+        `;
+        document.head.appendChild(styleSheet);
+    }
+
     // Try to add icon, but continue even if it fails
     const runtime = getChromeRuntime();
     if (runtime) {
         try {
             const iconImg = document.createElement('img');
-            iconImg.src = runtime.getURL('raicon20x20.png');
-            iconImg.alt = 'ResponseAble';
+            iconImg.src = runtime.getURL('xrepl-dark.png');
+            iconImg.alt = 'xRepl.ai';
             // Platform-specific icon sizing
             if (platform === 'linkedin') {
                 iconImg.style.cssText = 'width: 16px !important; height: 16px !important; max-width: 16px !important; max-height: 16px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
             } else {
                 iconImg.style.cssText = 'width: 20px !important; height: 20px !important; max-width: 28px !important; max-height: 28px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
             }
-            iconImg.addEventListener('error', () => console.error('Failed to load raicon20x20.png from:', iconImg.src));
+            iconImg.addEventListener('error', () => console.error('Failed to load xrepl-dark.png from:', iconImg.src));
             generateButton.appendChild(iconImg);
         } catch (error) {
             console.error('Error loading icon:', error);
@@ -2778,8 +2942,8 @@ Rules:
                     recipientName,
                     recipientCompany,
                     adapter,
-                    async (draftsText) => {
-                        await showDraftsOverlay(draftsText, context, platform, null, classification, regenerateContext);
+                    async (draftsText, isPartial = false) => {
+                        await showDraftsOverlay(draftsText, context, platform, null, classification, regenerateContext, null, isPartial);
                     },
                     regenerateContext  // Pass regenerateContext so function can access threadHistory
                 );
@@ -3817,14 +3981,24 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
             }
         ];
 
-        let data;
+        let draftsText;
         try {
-            data = await callProxyAPI(
+            // Use streaming API for draft generation - provides faster time-to-first-token
+            draftsText = await callProxyAPIStream(
                 apiConfig.provider,
                 apiConfig.model,
                 messages,
                 0.8,  // temperature
-                800   // max_tokens
+                800,  // max_tokens
+                // onChunk callback - called with each new chunk of content
+                (fullContent, newChunk) => {
+                    // Call onComplete with partial content for incremental UI updates
+                    // The overlay will re-render with the partial content
+                    if (onComplete) {
+                        onComplete(fullContent, true); // true = isPartial
+                    }
+                },
+                null  // abortSignal - could be added for cancellation support
             );
         } catch (fetchError) {
             // Handle network errors (CORS, connection issues, etc.)
@@ -3837,26 +4011,165 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
             throw fetchError;
         }
 
-        if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
-            console.error('Unexpected API response structure:', data);
-            throw new Error(`Invalid response format from ${apiConfig.provider} API`);
+        if (!draftsText || draftsText.trim().length === 0) {
+            console.error('Empty response from streaming API');
+            throw new Error(`Empty response from ${apiConfig.provider} API`);
         }
 
-        if (!data.choices[0].message || !data.choices[0].message.content) {
-            console.error('Unexpected message structure:', data.choices[0]);
-            throw new Error('Invalid message structure in API response');
-        }
-        const draftsText = data.choices[0].message.content;
-
-        onComplete(draftsText);
+        // Final call with complete content
+        onComplete(draftsText, false); // false = not partial, this is the final content
     } catch (err) {
         console.error('Error generating drafts:', err);
         throw err;
     }
 };
 
-const showDraftsOverlay = async (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null, newEmailParams = null) => {
-    // Remove existing overlay
+// Create a streaming overlay that shows content as it arrives
+const showStreamingOverlay = (initialText = '') => {
+    // Remove any existing overlay
+    document.querySelector('.responseable-overlay')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'responseable-overlay responseable-streaming';
+    overlay.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 80%;
+        max-width: 800px;
+        max-height: 90vh;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+        z-index: 2147483647;
+        padding: 24px;
+        font-family: Google Sans,Roboto,sans-serif;
+        display: flex;
+        flex-direction: column;
+    `;
+
+    // Add CSS animation for typing cursor
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes responseable-blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        .responseable-typing-cursor {
+            animation: responseable-blink 1s infinite;
+        }
+    `;
+    overlay.appendChild(style);
+
+    // Get icon URL for streaming overlay
+    const streamingRuntime = getChromeRuntime();
+    const streamingIconUrl = streamingRuntime ? streamingRuntime.getURL('xrepl-light.png') : '';
+
+    overlay.innerHTML += `
+        <div style="flex-shrink: 0;">
+            <h2 style="margin-top:0; display: flex; align-items: center; gap: 8px;">
+                <img src="${streamingIconUrl}" alt="xRepl.ai" style="width: 24px; height: 24px; animation: responseable-pulse 1.5s ease-in-out infinite;" onerror="this.style.display='none'">
+                <span style="color:#5567b9;">xRepl.ai</span><span style="color:#9b9fa8;"> - Generating Drafts...</span>
+            </h2>
+            <style>@keyframes responseable-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } }</style>
+        </div>
+        <div class="responseable-drafts-scroll" style="flex: 1; overflow-y: auto; margin: 16px 0; padding-right: 8px;">
+            <div class="responseable-streaming-content" style="font-size: 14px; line-height: 1.6; color: #202124; white-space: pre-wrap; font-family: inherit;">
+                ${initialText ? initialText.replace(/</g, '&lt;').replace(/>/g, '&gt;') : '<span style="color: #5f6368;">Waiting for response...</span>'}
+            </div>
+        </div>
+        <div style="flex-shrink: 0; display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #dadce0;">
+            <button class="responseable-close-btn" style="padding: 10px 24px; background: #f1f3f4; color: #5f6368; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Cancel</button>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // Add close button handler
+    overlay.querySelector('.responseable-close-btn').addEventListener('click', () => {
+        overlay.remove();
+    });
+
+    // Close on escape key
+    const escHandler = (e) => {
+        if (e.key === 'Escape') {
+            overlay.remove();
+            document.removeEventListener('keydown', escHandler);
+        }
+    };
+    document.addEventListener('keydown', escHandler);
+
+    return overlay;
+};
+
+// Format streaming content with variant labels and separators
+const formatStreamingContent = (content) => {
+    // Escape HTML
+    let displayText = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // Split by the variant separator
+    const separator = '|||RESPONSE_VARIANT|||';
+    const parts = displayText.split(separator);
+
+    if (parts.length <= 1) {
+        // No separators yet, just return the content as-is
+        return displayText;
+    }
+
+    // Format each variant with a label and horizontal separator
+    // Keep the full body including greeting - don't extract title from content
+    const formattedParts = parts.map((part, index) => {
+        const variantNum = index + 1;
+        const body = part.trim();
+        
+        // Variant label on its own line, styled with blue color
+        const variantLabel = `<div style="color: #5567b9; font-weight: bold; margin-bottom: 8px;">Variant ${variantNum}</div>`;
+        
+        if (index === 0) {
+            // First variant - no separator before it
+            return `${variantLabel}${body}`;
+        } else {
+            // Add horizontal separator before subsequent variants
+            return `<hr style="border: none; border-top: 1px solid #dadce0; margin: 16px 0;">${variantLabel}${body}`;
+        }
+    });
+
+    return formattedParts.join('');
+};
+
+// Update streaming overlay content
+const updateStreamingOverlay = (content) => {
+    const overlay = document.querySelector('.responseable-overlay.responseable-streaming');
+    if (!overlay) return false;
+
+    const streamingContent = overlay.querySelector('.responseable-streaming-content');
+    if (streamingContent) {
+        const formattedContent = formatStreamingContent(content);
+        streamingContent.innerHTML = `${formattedContent}<span class="responseable-typing-cursor" style="display: inline-block; width: 2px; height: 1em; background: #1a73e8; margin-left: 2px;"></span>`;
+
+        // Scroll to bottom
+        const scrollContainer = overlay.querySelector('.responseable-drafts-scroll');
+        if (scrollContainer) {
+            scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        }
+    }
+    return true;
+};
+
+const showDraftsOverlay = async (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null, newEmailParams = null, isPartial = false) => {
+    // For partial (streaming) updates, just update the streaming content
+    if (isPartial) {
+        // If streaming overlay exists, update it
+        if (updateStreamingOverlay(draftsText)) {
+            return;
+        }
+        // Otherwise create a new streaming overlay
+        showStreamingOverlay(draftsText);
+        return;
+    }
+
+    // Remove existing overlay for final render (including streaming overlay)
     document.querySelector('.responseable-overlay')?.remove();
 
     const adapter = customAdapter || platformAdapters[platform];
@@ -4096,7 +4409,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
 
     overlay.innerHTML = `
     <div style="flex-shrink: 0;">
-      <h2 style="margin-top:0; color:#202124; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> Able to Respond Better</h2>
+      <h2 style="margin-top:0; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> <span style="color:#5567b9;">xRepl.ai</span><span style="color:#5f6368;"> - Smart Replies, Instantly</span></h2>
       ${isNewEmail ? '' : (selectedPackageNames ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : '')}
       ${newEmailDropdownHtml}
       ${!isNewEmail && matchedTypeInfo ? `<p style="color:#5f6368; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}
@@ -4140,13 +4453,13 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     const iconContainer = overlay.querySelector('#responseable-overlay-icon');
     if (iconContainer && runtime) {
         try {
-            const iconUrl = runtime.getURL('raicon20x20.png');
+            const iconUrl = runtime.getURL('xrepl-light.png');
             const iconImg = document.createElement('img');
             iconImg.src = iconUrl;
-            iconImg.alt = 'ResponseAble';
+            iconImg.alt = 'xRepl.ai';
             iconImg.style.cssText = 'width: 24px !important; height: 24px !important; display: inline-block !important; vertical-align: middle !important; object-fit: contain !important; flex-shrink: 0 !important;';
             iconImg.addEventListener('error', (e) => {
-                console.error('Failed to load raicon20x20.png in overlay from:', iconImg.src);
+                console.error('Failed to load xrepl-light.png in overlay from:', iconImg.src);
                 iconImg.style.display = 'none';
             });
             iconContainer.appendChild(iconImg);
