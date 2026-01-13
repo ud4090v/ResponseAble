@@ -2413,10 +2413,17 @@ const updateButtonText = (button, newText) => {
     const iconImg = button.querySelector('img');
     if (iconImg) {
         if (isStatusUpdate) {
-            iconImg.style.animation = 'responseable-icon-pulse 1s ease-in-out infinite';
+            iconImg.style.animation = 'responseable-icon-pulse 0.8s ease-in-out infinite';
         } else {
             iconImg.style.animation = 'none';
         }
+    }
+
+    // Apply button glow animation during status updates
+    if (isStatusUpdate) {
+        button.style.animation = 'responseable-button-glow 1.5s ease-in-out infinite';
+    } else {
+        button.style.animation = 'none';
     }
 
     // Find the text span or create one
@@ -2436,17 +2443,20 @@ const updateButtonText = (button, newText) => {
         }
     }
 
-    // Apply fade-in animation for status updates
+    // Apply fade-in and bounce animation for status updates
     if (isStatusUpdate) {
         textSpan.style.opacity = '0';
         textSpan.textContent = newText;
         textSpan.style.transition = 'opacity 0.3s ease-in';
+        textSpan.style.animation = 'responseable-text-bounce 0.6s ease-in-out infinite';
+        textSpan.style.display = 'inline-block';
         requestAnimationFrame(() => {
             textSpan.style.opacity = '1';
         });
     } else {
         textSpan.style.transition = 'none';
         textSpan.style.opacity = '1';
+        textSpan.style.animation = 'none';
         textSpan.textContent = newText;
     }
 };
@@ -2461,8 +2471,18 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
         styleSheet.id = 'responseable-button-animations';
         styleSheet.textContent = `
             @keyframes responseable-icon-pulse {
-                0%, 100% { transform: scale(1); }
-                50% { transform: scale(1.1); }
+                0%, 100% { transform: scale(1) rotate(0deg); }
+                25% { transform: scale(1.15) rotate(-5deg); }
+                50% { transform: scale(1.2) rotate(0deg); }
+                75% { transform: scale(1.15) rotate(5deg); }
+            }
+            @keyframes responseable-button-glow {
+                0%, 100% { box-shadow: 0 0 5px rgba(85, 103, 185, 0.3); }
+                50% { box-shadow: 0 0 15px rgba(85, 103, 185, 0.6); }
+            }
+            @keyframes responseable-text-bounce {
+                0%, 100% { transform: translateY(0); }
+                50% { transform: translateY(-2px); }
             }
         `;
         document.head.appendChild(styleSheet);
@@ -4030,9 +4050,9 @@ const showStreamingOverlay = (initialText = '') => {
 
     overlay.innerHTML += `
         <div style="flex-shrink: 0;">
-            <h2 style="margin-top:0; color:#9b9fa8; display: flex; align-items: center; gap: 8px;">
+            <h2 style="margin-top:0; display: flex; align-items: center; gap: 8px;">
                 <img src="${streamingIconUrl}" alt="xRepl.ai" style="width: 24px; height: 24px; animation: responseable-pulse 1.5s ease-in-out infinite;" onerror="this.style.display='none'">
-                xRepl.ai - Generating Drafts...
+                <span style="color:#5567b9;">xRepl.ai</span><span style="color:#9b9fa8;"> - Generating Drafts...</span>
             </h2>
             <style>@keyframes responseable-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } }</style>
         </div>
@@ -4371,7 +4391,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
 
     overlay.innerHTML = `
     <div style="flex-shrink: 0;">
-      <h2 style="margin-top:0; color:#5567b9; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> xRepl.ai - Smart Replies, Instantly</h2>
+      <h2 style="margin-top:0; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> <span style="color:#5567b9;">xRepl.ai</span><span style="color:#5f6368;"> - Smart Replies, Instantly</span></h2>
       ${isNewEmail ? '' : (selectedPackageNames ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : '')}
       ${newEmailDropdownHtml}
       ${!isNewEmail && matchedTypeInfo ? `<p style="color:#5f6368; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}
