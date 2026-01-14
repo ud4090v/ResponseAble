@@ -16,7 +16,8 @@
         },
         "contentPackagesAllowed": false,
         "allContent": false,
-        "styleMimickingEnabled": false
+        "styleMimickingEnabled": false,
+        "classificationConfidenceEnabled": false
     },
     {
         "name": "basic",
@@ -26,7 +27,8 @@
         "maxTones": 3,
         "maxGenerationsPerMonth": 200,
         "availableProviders": [
-            "openai"
+            "openai",
+            "grok"
         ],
         "availableModels": {
             "openai": [
@@ -34,11 +36,15 @@
                 "gpt-4o-mini",
                 "gpt-4-turbo",
                 "gpt-3.5-turbo"
+            ],
+            "grok": [
+                "grok-4-fast"
             ]
         },
         "contentPackagesAllowed": false,
         "allContent": false,
-        "styleMimickingEnabled": false
+        "styleMimickingEnabled": false,
+        "classificationConfidenceEnabled": false
     },
     {
         "name": "pro",
@@ -68,7 +74,8 @@
         },
         "contentPackagesAllowed": true,
         "allContent": false,
-        "styleMimickingEnabled": true
+        "styleMimickingEnabled": true,
+        "classificationConfidenceEnabled": true
     },
     {
         "name": "ultimate",
@@ -98,6 +105,7 @@
         },
         "contentPackagesAllowed": true,
         "allContent": true,
-        "styleMimickingEnabled": true
+        "styleMimickingEnabled": true,
+        "classificationConfidenceEnabled": true
     }
 ]
