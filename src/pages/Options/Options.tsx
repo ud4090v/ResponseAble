@@ -41,6 +41,7 @@ interface SubscriptionPlan {
   contentPackagesAllowed: boolean;
   allContent: boolean;
   styleMimickingEnabled: boolean;
+  classificationConfidenceEnabled: boolean;
 }
 
 // Master list of all available packages - imported from shared config
@@ -200,10 +201,15 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       updatedConfig.numTones = newPlan.maxTones;
     }
 
+    // Handle classificationConfidenceThreshold - reset to 0.85 if downgrading to a plan that doesn't support it
+    if (!newPlan.classificationConfidenceEnabled && oldPlan?.classificationConfidenceEnabled) {
+      updatedConfig.classificationConfidenceThreshold = 0.85;
+    }
+
     // Apply all config updates at once
     if (updatedConfig.provider !== config.provider || updatedConfig.model !== config.model ||
       updatedConfig.numVariants !== config.numVariants || updatedConfig.numGoals !== config.numGoals ||
-      updatedConfig.numTones !== config.numTones) {
+      updatedConfig.numTones !== config.numTones || updatedConfig.classificationConfidenceThreshold !== config.classificationConfidenceThreshold) {
       setConfig(updatedConfig);
     }
 
@@ -311,9 +317,9 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       <div className="OptionsContent">
         <h1 style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
           {iconUrl && (
-            <img 
-              src={iconUrl} 
-              alt="xRepl.ai" 
+            <img
+              src={iconUrl}
+              alt="xRepl.ai"
               style={{ width: '32px', height: '32px', objectFit: 'contain' }}
             />
           )}
@@ -478,32 +484,35 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 </p>
               </div>
 
-              <div className="SettingGroup">
-                <label htmlFor="confidence-threshold">Minimum Classification Confidence:</label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <input
-                    id="confidence-threshold"
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={config.classificationConfidenceThreshold}
-                    onChange={(e) => {
-                      const value = parseFloat(e.target.value);
-                      if (!isNaN(value) && value >= 0 && value <= 1) {
-                        setConfig({ ...config, classificationConfidenceThreshold: value });
-                      }
-                    }}
-                    style={{ flex: 1, maxWidth: '300px' }}
-                  />
-                  <span style={{ minWidth: '60px', fontSize: '14px', fontWeight: 'bold' }}>
-                    {(config.classificationConfidenceThreshold * 100).toFixed(0)}%
-                  </span>
+              {/* Minimum Classification Confidence - Only show for plans with classificationConfidenceEnabled */}
+              {currentPlan && currentPlan.classificationConfidenceEnabled && (
+                <div className="SettingGroup">
+                  <label htmlFor="confidence-threshold">Minimum Classification Confidence:</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <input
+                      id="confidence-threshold"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={config.classificationConfidenceThreshold}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        if (!isNaN(value) && value >= 0 && value <= 1) {
+                          setConfig({ ...config, classificationConfidenceThreshold: value });
+                        }
+                      }}
+                      style={{ flex: 1, maxWidth: '300px' }}
+                    />
+                    <span style={{ minWidth: '60px', fontSize: '14px', fontWeight: 'bold' }}>
+                      {(config.classificationConfidenceThreshold * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                    If classification confidence is below this threshold, the system will use Generic package. Higher values = stricter matching (0.0-1.0, default: 0.85)
+                  </p>
                 </div>
-                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
-                  If classification confidence is below this threshold, the system will use Generic package. Higher values = stricter matching (0.0-1.0, default: 0.85)
-                </p>
-              </div>
+              )}
 
               {/* Style Mimicking Toggle - Show for all plans, but disabled for Free/Basic */}
               <div className="SettingGroup">
@@ -518,9 +527,9 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                       }
                     }}
                     disabled={!currentPlan?.styleMimickingEnabled}
-                    style={{ 
-                      width: '18px', 
-                      height: '18px', 
+                    style={{
+                      width: '18px',
+                      height: '18px',
                       cursor: currentPlan?.styleMimickingEnabled ? 'pointer' : 'not-allowed',
                       opacity: currentPlan?.styleMimickingEnabled ? 1 : 0.5
                     }}
