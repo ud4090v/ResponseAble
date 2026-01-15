@@ -34,7 +34,7 @@ const RESPONSE_VARIANT_SEPARATOR = '|||RESPONSE_VARIANT|||';
 // Helper function to make API calls through Vercel proxy
 const callProxyAPI = async (provider, model, messages, temperature = 0.8, max_tokens = 1000) => {
     try {
-        const response = await fetch(VERCEL_PROXY_URL, {
+        const response = await fetch(`${VERCEL_PROXY_URL}/generate`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -73,7 +73,7 @@ const callProxyAPI = async (provider, model, messages, temperature = 0.8, max_to
 // Helper function to make streaming API calls through Vercel proxy
 // Returns an async generator that yields content chunks as they arrive
 const callProxyAPIStream = async (provider, model, messages, temperature = 0.8, max_tokens = 1000, onChunk = null, abortSignal = null) => {
-    const response = await fetch(VERCEL_PROXY_URL, {
+    const response = await fetch(`${VERCEL_PROXY_URL}/generate`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -508,78 +508,35 @@ const analyzeWritingStyle = async (userEmails, platform) => {
         return null; // No user emails to analyze
     }
 
-    // Combine user emails for analysis
-    const combinedText = userEmails.join('\n\n---\n\n');
-
-    // Use AI to analyze writing style
+    // Use new API endpoint for style analysis
     await loadApiConfig();
     const classificationModel = apiConfig.provider === 'openai'
         ? 'gpt-4o-mini'
         : 'grok-4-fast';
 
-    const styleAnalysisPrompt = `Analyze the writing style of the user's emails below and return ONLY a JSON object with:
-{
-  "formality": "formal" | "professional" | "professional-casual" | "casual",
-  "sentence_length": "short" | "medium" | "long",
-  "word_choice": "simple" | "moderate" | "complex",
-  "punctuation_style": "minimal" | "standard" | "frequent" | "emojis",
-  "greeting_patterns": ["array of greeting patterns found, e.g., 'Hi [Name],', 'Hello,'"],
-  "closing_patterns": ["array of closing patterns found, e.g., 'Best regards,', 'Thanks,'"],
-  "usesEmojis": boolean (true if user frequently uses emojis, false otherwise),
-  "usesExclamations": boolean (true if user frequently uses exclamation marks, false otherwise),
-  "startsWithGreeting": boolean (true if user typically starts emails with a greeting, false otherwise),
-  "endsWithSignOff": boolean (true if user typically ends emails with a sign-off/closing, false otherwise)
-}
-
-Analyze these user emails:
-${combinedText}
-
-Return ONLY valid JSON, no other text.`;
-
     try {
-        const messages = [
-            {
-                role: 'system',
-                content: styleAnalysisPrompt
+        const response = await fetch(`${VERCEL_PROXY_URL}/analyze-style`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
             },
-            {
-                role: 'user',
-                content: 'Analyze the writing style from the emails above.'
-            }
-        ];
+            body: JSON.stringify({
+                userEmails: userEmails,
+                provider: apiConfig.provider,
+                model: classificationModel
+            })
+        });
 
-        const styleData = await callProxyAPI(
-            apiConfig.provider,
-            classificationModel,
-            messages,
-            0.3,  // temperature
-            500   // max_tokens
-        );
-
-        let styleContent = styleData.choices?.[0]?.message?.content || '{}';
-
-        // Clean up content
-        styleContent = styleContent.trim();
-        if (styleContent.startsWith('```json')) {
-            styleContent = styleContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-        } else if (styleContent.startsWith('```')) {
-            styleContent = styleContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || `HTTP ${response.status}: ${response.statusText}`);
         }
 
-        const styleAnalysis = JSON.parse(styleContent);
-        return {
-            formality: styleAnalysis.formality || 'professional',
-            sentence_length: styleAnalysis.sentence_length || 'medium',
-            word_choice: styleAnalysis.word_choice || 'moderate',
-            punctuation_style: styleAnalysis.punctuation_style || 'standard',
-            greeting_patterns: styleAnalysis.greeting_patterns || [],
-            closing_patterns: styleAnalysis.closing_patterns || [],
-            usesEmojis: styleAnalysis.usesEmojis === true,
-            usesExclamations: styleAnalysis.usesExclamations === true,
-            startsWithGreeting: styleAnalysis.startsWithGreeting !== false, // Default to true
-            endsWithSignOff: styleAnalysis.endsWithSignOff !== false, // Default to true
-            sample_count: userEmails.length
-        };
+        // API returns structured response with defaults already applied
+        const styleAnalysis = await response.json();
+
+        // Return the response directly (API already handles defaults and formatting)
+        return styleAnalysis;
     } catch (error) {
         console.error('Style analysis error:', error);
         return null;
@@ -647,20 +604,8 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         // Get user-selected packages from storage (defaults to base package if none selected)
         const userPackages = await getUserPackages();
 
-        // OPTIMIZATION: Format packages compactly for type determination (reduces tokens)
-        // Only include name and description - full details are retrieved after type is matched
-        const typesWithContext = userPackages.map(p => getCompactPackageInfo(p)).join('\n');
-
-        // Step 1: Determine email type based on packages
+        // Step 1: Determine email type based on packages using new API endpoint
         // CRITICAL: This determines the type based on the SPECIFIC email being replied to, NOT the overall thread
-        // OPTIMIZATION: Simplified prompt to reduce tokens while maintaining accuracy
-        const typeDeterminationPrompt = `Available packages:
-${typesWithContext}
-
-Classify the email into one of the packages above. Return JSON:
-{"matched_type":{"name":"package_name","description":"...","intent":"...","roleDescription":"...","contextSpecific":"..."},"confidence":0.0-1.0,"reason":"brief explanation"}
-
-Rules: Only use packages listed. If unclear, use base package. Focus on the specific email content, not thread history.`;
 
         // Extract the actual email being replied to and thread history separately
         // sourceMessageText is the ACTUAL email being replied to (not latest, but the specific one)
@@ -674,45 +619,35 @@ Rules: Only use packages listed. If unclear, use base package. Focus on the spec
         // Use senderName if provided (extracted from the email being replied to), otherwise fall back to richContext
         const actualSenderName = senderName || richContext.recipientName || '';
 
-        // First API call: Determine type
+        // First API call: Determine type using new endpoint
         // CRITICAL: Do NOT include thread history here - LLMs are influenced by text even when told to "ignore" it
         // The user's test showed that the same email text produces correct classification when standalone,
         // but wrong classification when thread history is included (even with "IGNORE" instructions)
-        const typeDeterminationMessages = [
-            {
-                role: 'system',
-                content: typeDeterminationPrompt
-            },
-            {
-                role: 'user',
-                content: `=== EMAIL BEING REPLIED TO ===
-${emailBeingRepliedTo}
-
-${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
-            }
-        ];
-
         let typeMatchResult;
         try {
-            const typeData = await callProxyAPI(
-                apiConfig.provider,
-                classificationModel,
-                typeDeterminationMessages,
-                0.3,  // temperature
-                1200  // max_tokens - increased to ensure complete JSON responses
-            );
+            const response = await fetch(`${VERCEL_PROXY_URL}/classify-email-type`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    emailContent: emailBeingRepliedTo,
+                    recipientName: richContext.recipientName || richContext.to || actualSenderName,
+                    recipientCompany: richContext.recipientCompany,
+                    subject: richContext.subject && richContext.subject !== 'LinkedIn Message' ? richContext.subject : undefined,
+                    availablePackages: userPackages,
+                    confidenceThreshold: apiConfig.classificationConfidenceThreshold !== undefined ? apiConfig.classificationConfidenceThreshold : 0.85,
+                    provider: apiConfig.provider,
+                    model: classificationModel
+                })
+            });
 
-            let typeContent = typeData.choices?.[0]?.message?.content || '{}';
-
-            // Clean up content - remove markdown code blocks if present
-            typeContent = typeContent.trim();
-            if (typeContent.startsWith('```json')) {
-                typeContent = typeContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-            } else if (typeContent.startsWith('```')) {
-                typeContent = typeContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || `HTTP ${response.status}: ${response.statusText}`);
             }
 
-            typeMatchResult = JSON.parse(typeContent);
+            typeMatchResult = await response.json();
         } catch (typeError) {
             console.error('Type determination error:', typeError);
             // Fallback to base package type
@@ -761,69 +696,37 @@ ${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipi
             // Intent is defaulted to base package intent, goals are determined based on base package intent
             const genericIntent = matchedType.intent;
 
-            const genericGoalsPrompt = `You are an expert email classifier. The intent has ALREADY been determined as a generic professional intent. Your task is to determine appropriate response goals that are contextually relevant to the email while staying within generic professional boundaries.
-
-The generic intent is: "${genericIntent}"
-
-CRITICAL: Do NOT analyze the email content to determine or infer any intent. The intent is already provided above as generic. However, you SHOULD use the email content to understand the context and determine contextually appropriate response goals.
-
-Return a JSON object with:
-{
-  "response_goals": Array of up to ${apiConfig.numGoals || 3} most appropriate goals for the recipient's reply, ranked by suitability. These goals should be contextually relevant to the email content while remaining generic professional responses. Prioritize positive, constructive, and engaging response goals (e.g., "Express interest", "Request more information", "Schedule a discussion") over negative or defensive ones (e.g., "Politely decline", "Reject the offer"). The first goal should be the most positive and constructive response option.
-  "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
-  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
-  "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
-  "recipient_company": string or null (the company of the person who SENT this email),
-  "key_topics": array of strings (max 5, based on the email content)
-}
-
-Email content (use this to understand context for determining appropriate goals):
-${emailBeingRepliedTo}
-
-${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}
-
-CRITICAL INSTRUCTIONS:
-- The intent is ALREADY determined as: "${genericIntent}" - do NOT analyze the email to determine intent
-- Use the email content to understand the context and determine contextually appropriate goals
-- Prioritize positive, constructive response goals (express interest, request information, engage positively) as the first/recommended goal
-- Goals should be generic professional responses but contextually relevant to what the sender is offering/asking
-- Only use the email content to extract recipient_name, recipient_company, and key_topics
-- Do NOT include an "intent" field in your JSON response - the intent is already determined
-- Return ONLY valid JSON, no other text.`;
-
-            const genericGoalsMessages = [
-                {
-                    role: 'system',
-                    content: genericGoalsPrompt
-                }
-            ];
-
             try {
-                const genericGoalsData = await callProxyAPI(
-                    apiConfig.provider,
-                    classificationModel,
-                    genericGoalsMessages,
-                    0.3,
-                    1500
-                );
-                let genericGoalsContent = genericGoalsData.choices?.[0]?.message?.content || '{}';
-                genericGoalsContent = genericGoalsContent.trim();
-                if (genericGoalsContent.startsWith('```json')) {
-                    genericGoalsContent = genericGoalsContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-                } else if (genericGoalsContent.startsWith('```')) {
-                    genericGoalsContent = genericGoalsContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
-                }
-                const genericGoalsResult = JSON.parse(genericGoalsContent);
+                // Use new API endpoint for generic goals determination
+                const response = await fetch(`${VERCEL_PROXY_URL}/determine-goals-generic`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        emailContent: emailBeingRepliedTo,
+                        genericIntent: genericIntent,
+                        recipientName: actualSenderName || richContext.recipientName || richContext.to,
+                        recipientCompany: richContext.recipientCompany,
+                        subject: richContext.subject && richContext.subject !== 'LinkedIn Message' ? richContext.subject : undefined,
+                        numGoals: apiConfig.numGoals || 3,
+                        numVariants: numVariants,
+                        provider: apiConfig.provider,
+                        model: classificationModel
+                    })
+                });
 
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || `HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const genericGoalsResult = await response.json();
+
+                // API already handles defaults and ensures intent is generic
                 // Use generic intent and goals from the result
-                // CRITICAL: Always use genericIntent, ignore any intent field the AI might return
-                // Explicitly delete any intent field from AI response to prevent accidental use
-                if (genericGoalsResult.intent) {
-                    delete genericGoalsResult.intent;
-                }
-
                 intentGoalsResult = {
-                    intent: genericIntent,  // Always use the generic intent, never from email analysis
+                    intent: genericGoalsResult.intent || genericIntent,  // API returns generic intent
                     response_goals: genericGoalsResult.response_goals || ['Respond appropriately', 'Address the question', 'Provide information'],
                     goal_titles: genericGoalsResult.goal_titles || {},
                     variant_sets: genericGoalsResult.variant_sets || {},

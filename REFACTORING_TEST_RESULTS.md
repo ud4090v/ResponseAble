@@ -1,8 +1,11 @@
 # API Refactoring Test Results
 
 **Date:** December 2024  
-**Test:** API Call #1 - User Style Analysis (`analyze-style`)  
 **Base URL:** `https://xrepl.app/api`
+
+---
+
+## API Call #1: User Style Analysis (`analyze-style`)
 
 ---
 
