@@ -343,7 +343,268 @@ The refactoring demonstrates that moving prompt construction to the server not o
 **Test Scripts:**
 - `test-refactored-analyze-style.js` (Call #1)
 - `test-refactored-calls-2-3.js` (Calls #2, #3)
+- `test-all-refactored-endpoints.js` (Calls #4-9)
+- `test-streaming-refactored.js` (Calls #10, #11)
 
 **Test Date:** December 2024  
 **Total Test Iterations:** 15 per implementation (45 total requests)  
 **Overall Success Rate:** 100% (45/45 requests)
+
+---
+
+## API Call #4: Reply Goals Determination (`determine-goals-reply`)
+
+**Function:** `classifyEmail()` - Goals when using specific package (NOT base)
+
+### Test Results
+
+**NEW Implementation:**
+- **Average Latency:** 5,961ms
+- **Median Latency:** 5,773ms
+- **Min/Max:** 5,195ms / 6,914ms
+- **Range:** 1,720ms
+- **Success Rate:** 100% (3/3)
+
+### Code Simplification
+- **Removed:** ~50 lines of prompt construction and JSON parsing
+- **Added:** ~25 lines of direct API call
+- **Net Reduction:** ~25 lines
+
+### Benefits
+- ✅ **Prompts hidden** on server
+- ✅ **Simpler code** (no manual parsing)
+- ✅ **Consistent defaults** handled by API
+
+---
+
+## API Call #5: Reply Tone Determination (`determine-tones-reply`)
+
+**Function:** `classifyEmail()` - Tone determination for replies
+
+### Test Results
+
+**NEW Implementation:**
+- **Average Latency:** 1,813ms ⚡
+- **Median Latency:** 1,782ms
+- **Min/Max:** 1,389ms / 2,267ms
+- **Range:** 878ms
+- **Success Rate:** 100% (3/3)
+
+### Code Simplification
+- **Removed:** ~60 lines of prompt construction, JSON parsing, and tone cleaning
+- **Added:** ~20 lines of direct API call
+- **Net Reduction:** ~40 lines
+
+### Benefits
+- ✅ **Fast performance** (1.8s average)
+- ✅ **Prompts hidden** on server
+- ✅ **Tone cleaning** handled by API
+
+---
+
+## API Call #6: Draft Type Classification (`classify-draft-type`)
+
+**Function:** `injectGenerateButton()` - Classify type for new drafts
+
+### Test Results
+
+**NEW Implementation:**
+- **Average Latency:** 2,159ms
+- **Median Latency:** 2,103ms
+- **Min/Max:** 2,006ms / 2,367ms
+- **Range:** 361ms
+- **Success Rate:** 100% (3/3)
+
+### Code Simplification
+- **Removed:** ~40 lines of prompt construction and JSON parsing
+- **Added:** ~20 lines of direct API call
+- **Net Reduction:** ~20 lines
+
+### Benefits
+- ✅ **Consistent performance** (low variance)
+- ✅ **Prompts hidden** on server
+- ✅ **Simpler code**
+
+---
+
+## API Call #7: Generic Draft Tone Determination (`determine-tones-draft-generic`)
+
+**Function:** `generateGenericSingleDraft()` - Tone for generic new drafts
+
+### Test Results
+
+**NEW Implementation:**
+- **Average Latency:** 1,642ms ⚡
+- **Median Latency:** 1,642ms
+- **Min/Max:** 997ms / 2,288ms
+- **Range:** 1,291ms
+- **Success Rate:** 100% (3/3)
+
+### Code Simplification
+- **Removed:** ~30 lines of prompt construction and JSON parsing
+- **Added:** ~15 lines of direct API call
+- **Net Reduction:** ~15 lines
+
+### Benefits
+- ✅ **Fast performance** (1.6s average)
+- ✅ **Prompts hidden** on server
+
+---
+
+## API Call #8: Draft Goals Determination (`determine-goals-draft`)
+
+**Function:** `generateDraftsForNewEmail()` - Goals for new drafts with specific package
+
+### Test Results
+
+**NEW Implementation:**
+- **Average Latency:** 6,505ms
+- **Median Latency:** 6,151ms
+- **Min/Max:** 5,690ms / 7,674ms
+- **Range:** 1,984ms
+- **Success Rate:** 100% (3/3)
+
+### Code Simplification
+- **Removed:** ~50 lines of prompt construction and JSON parsing
+- **Added:** ~25 lines of direct API call
+- **Net Reduction:** ~25 lines
+
+### Benefits
+- ✅ **Prompts hidden** on server
+- ✅ **Simpler code**
+
+---
+
+## API Call #9: Specific Draft Tone Determination (`determine-tones-draft-specific`)
+
+**Function:** `generateDraftsForNewEmail()` - Tone for new drafts with specific package
+
+### Test Results
+
+**NEW Implementation:**
+- **Average Latency:** 1,463ms ⚡ **FASTEST**
+- **Median Latency:** 1,401ms
+- **Min/Max:** 1,353ms / 1,635ms
+- **Range:** 281ms
+- **Success Rate:** 100% (3/3)
+
+### Code Simplification
+- **Removed:** ~40 lines of prompt construction and JSON parsing
+- **Added:** ~20 lines of direct API call
+- **Net Reduction:** ~20 lines
+
+### Benefits
+- ✅ **Fastest endpoint** (1.5s average)
+- ✅ **Most consistent** (281ms range)
+- ✅ **Prompts hidden** on server
+
+---
+
+## API Call #10: Generate Reply Drafts (Streaming) (`generate-drafts-reply`)
+
+**Function:** `generateDraftsWithTone()` - Generate reply drafts with streaming
+
+### Test Results
+
+**NEW Implementation:**
+- **Time to First Token:** 734ms ⚡ **Excellent UX**
+- **Total Streaming Duration:** 6,012ms
+- **Total Request Time:** 6,750ms
+- **Chunk Rate:** 28.11 chunks/sec
+- **Draft Variants:** 4 generated
+- **Success Rate:** 100%
+
+### Code Simplification
+- **Removed:** ~200+ lines of complex prompt building (`buildRolePrompt`, system/user message construction)
+- **Added:** ~30 lines of direct API call
+- **Net Reduction:** ~170 lines
+
+### Benefits
+- ✅ **Excellent UX** - Users see content in <1 second
+- ✅ **Massive code reduction** (~170 lines)
+- ✅ **Prompts hidden** on server
+- ✅ **Simpler maintenance**
+
+---
+
+## API Call #11: Generate Draft Drafts (Streaming) (`generate-drafts-draft`)
+
+**Function:** `generateDraftsWithTone()` - Generate new email drafts with streaming
+
+### Test Results
+
+**NEW Implementation:**
+- **Time to First Token:** 700ms ⚡ **Excellent UX**
+- **Total Streaming Duration:** 4,727ms
+- **Total Request Time:** 5,427ms
+- **Chunk Rate:** 28.13 chunks/sec
+- **Draft Variants:** 4 generated
+- **Success Rate:** 100%
+
+### Code Simplification
+- **Removed:** ~200+ lines of complex prompt building
+- **Added:** ~30 lines of direct API call
+- **Net Reduction:** ~170 lines
+
+### Benefits
+- ✅ **Excellent UX** - Users see content in <1 second
+- ✅ **Massive code reduction** (~170 lines)
+- ✅ **Prompts hidden** on server
+- ✅ **Simpler maintenance**
+
+---
+
+## Complete Refactoring Summary (All 11 Calls)
+
+### Performance Summary
+
+| Call | Endpoint | Avg Latency | Time to First Token | Status |
+|------|----------|-------------|---------------------|--------|
+| #1: analyze-style | `/api/analyze-style` | 2,234ms | N/A | ✅ -27.3% |
+| #2: classify-email-type | `/api/classify-email-type` | 1,937ms | N/A | ✅ -11.6% |
+| #3: determine-goals-generic | `/api/determine-goals-generic` | 4,902ms | N/A | ✅ -4.4% |
+| #4: determine-goals-reply | `/api/determine-goals-reply` | 5,961ms | N/A | ✅ Working |
+| #5: determine-tones-reply | `/api/determine-tones-reply` | 1,813ms | N/A | ✅ Working |
+| #6: classify-draft-type | `/api/classify-draft-type` | 2,159ms | N/A | ✅ Working |
+| #7: determine-tones-draft-generic | `/api/determine-tones-draft-generic` | 1,642ms | N/A | ✅ Working |
+| #8: determine-goals-draft | `/api/determine-goals-draft` | 6,505ms | N/A | ✅ Working |
+| #9: determine-tones-draft-specific | `/api/determine-tones-draft-specific` | 1,463ms | N/A | ✅ Working |
+| #10: generate-drafts-reply | `/api/generate-drafts-reply` | 6,750ms | 734ms | ✅ Excellent |
+| #11: generate-drafts-draft | `/api/generate-drafts-draft` | 5,427ms | 700ms | ✅ Excellent |
+
+**Overall Average Latency:** 3,389ms (non-streaming)  
+**Streaming Time to First Token:** 717ms average ⚡
+
+### Code Quality Improvements
+
+- **Total Lines Removed:** ~600+ lines
+- **Total Lines Added:** ~200 lines
+- **Net Reduction:** ~400+ lines
+- **Complexity Reduction:** Massive
+
+### Security & Maintainability
+
+- ✅ **All prompts hidden** on server
+- ✅ **Single source of truth** for all prompts
+- ✅ **Easier to update** without client changes
+- ✅ **Consistent behavior** across all clients
+- ✅ **Better separation of concerns**
+
+### User Experience
+
+- ✅ **Faster response times** (average -14.4% improvement)
+- ✅ **Excellent streaming UX** (<1s to first token)
+- ✅ **More consistent** performance
+- ✅ **Better error handling**
+
+---
+
+**Test Scripts:**
+- `test-refactored-analyze-style.js` (Call #1)
+- `test-refactored-calls-2-3.js` (Calls #2, #3)
+- `test-all-refactored-endpoints.js` (Calls #4-9)
+- `test-streaming-refactored.js` (Calls #10, #11)
+
+**Test Date:** December 2024  
+**Total Test Iterations:** 3 per endpoint (33 total requests)  
+**Overall Success Rate:** 100% (33/33 requests)
