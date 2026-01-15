@@ -156,6 +156,93 @@ const callProxyAPIStream = async (provider, model, messages, temperature = 0.8, 
     return fullContent;
 };
 
+// Helper function to call new streaming API endpoints
+const callNewStreamingAPI = async (url, body, onChunk = null, abortSignal = null) => {
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: abortSignal
+    });
+
+    if (!response.ok) {
+        let errorData = {};
+        try {
+            errorData = await response.json();
+        } catch (e) {
+            errorData = { error: { message: response.statusText } };
+        }
+        const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+        throw new Error(errorMessage);
+    }
+
+    // Read the stream (same format as callProxyAPIStream)
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = '';
+    let buffer = '';
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+
+            if (done) {
+                break;
+            }
+
+            // Decode the chunk
+            buffer += decoder.decode(value, { stream: true });
+
+            // Process complete SSE frames (lines ending with \n\n)
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const data = line.slice(6);
+
+                    if (data === '[DONE]') {
+                        continue;
+                    }
+
+                    try {
+                        const parsed = JSON.parse(data);
+                        const content = parsed.choices?.[0]?.delta?.content || '';
+
+                        if (content) {
+                            fullContent += content;
+                            if (onChunk) {
+                                onChunk(fullContent, content);
+                            }
+                        }
+                    } catch (e) {
+                        // Skip malformed JSON chunks
+                    }
+                } else if (line.trim() && !line.startsWith('data:')) {
+                    // Handle direct content (non-SSE format)
+                    const content = line.trim();
+                    if (content) {
+                        fullContent += content;
+                        if (onChunk) {
+                            onChunk(fullContent, content);
+                        }
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            // Request was cancelled, return what we have
+            return fullContent;
+        }
+        throw error;
+    }
+
+    return fullContent;
+};
+
 // Load API configuration from storage
 const loadApiConfig = async () => {
     return new Promise((resolve) => {
@@ -806,49 +893,32 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
             // CRITICAL: This call sees ONLY the FOCUS_EMAIL - NO thread history at all
             // This ensures intent and goals are determined solely from the specific email
             // BUT: We now include type-specific context to guide appropriate intent and variant generation
-            const intentGoalsPrompt = `You are an expert email classifier. Analyze ONLY the provided email and return a JSON object with:
-{
-  "intent": Determine the sender's primary intent from the recipient's perspective. What is the sender specifically asking, requesting, or doing in THIS email? Be specific and contextual.
-  "response_goals": Array of up to ${apiConfig.numGoals || 3} most appropriate goals for the recipient's reply, ranked by suitability. These goals MUST be based on and directly address the intent you determined above. Each goal should be a specific action the recipient should take to respond to that intent.
-  "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
-  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
-  "recipient_name": string (the name of the person who SENT this email${actualSenderName ? ` - should be "${actualSenderName}"` : ''}),
-  "recipient_company": string or null (the company of the person who SENT this email),
-  "key_topics": array of strings (max 5, based on the email content)
-}
-
-CRITICAL INSTRUCTIONS:
-Return ONLY valid JSON, no other text.`;
-
-            const intentGoalsMessages = [
-                {
-                    role: 'system',
-                    content: intentGoalsPrompt
-                },
-                {
-                    role: 'user',
-                    content: `${emailBeingRepliedTo}
-
-${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}`
-                }
-            ];
-
             try {
-                const intentGoalsData = await callProxyAPI(
-                    apiConfig.provider,
-                    classificationModel,
-                    intentGoalsMessages,
-                    0.3,
-                    1500
-                );
-                let intentGoalsContent = intentGoalsData.choices?.[0]?.message?.content || '{}';
-                intentGoalsContent = intentGoalsContent.trim();
-                if (intentGoalsContent.startsWith('```json')) {
-                    intentGoalsContent = intentGoalsContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-                } else if (intentGoalsContent.startsWith('```')) {
-                    intentGoalsContent = intentGoalsContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                // Use new API endpoint for reply goals determination
+                const response = await fetch(`${VERCEL_PROXY_URL}/determine-goals-reply`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        emailContent: emailBeingRepliedTo,
+                        package: matchedType,
+                        recipientName: actualSenderName || richContext.recipientName || richContext.to,
+                        recipientCompany: richContext.recipientCompany,
+                        subject: richContext.subject && richContext.subject !== 'LinkedIn Message' ? richContext.subject : undefined,
+                        numGoals: apiConfig.numGoals || 3,
+                        numVariants: numVariants,
+                        provider: apiConfig.provider,
+                        model: classificationModel
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || `HTTP ${response.status}: ${response.statusText}`);
                 }
-                intentGoalsResult = JSON.parse(intentGoalsContent);
+
+                intentGoalsResult = await response.json();
             } catch (intentError) {
                 console.error('Intent/Goals determination error:', intentError);
                 // Fallback with generic values
@@ -869,55 +939,31 @@ ${richContext.recipientName || richContext.to ? `Sender: ${richContext.recipient
         // ============================================================================
         // This call can see the full thread to determine appropriate tone and dynamic
         // The intent and goals are already locked from Step 2
-        const toneDynamicPrompt = `You are an expert at analyzing conversation tone and dynamics. Based on the email thread provided, determine the optimal tone for a reply.
-
-The intent has already been determined as: "${intentGoalsResult.intent}"
-The response goals are: ${JSON.stringify(intentGoalsResult.response_goals)}
-
-Analyze the conversation history to determine:
-1. The overall relationship dynamic (formal/informal, professional/casual)
-2. The appropriate tone for responding
-3. Tone options for each response goal
-
-Return ONLY a JSON object with:
-{
-  "tone_needed": string (the single most appropriate tone for the reply - must be a SHORT tone name, 1-2 words max, NOT a full sentence),
-  "tone_sets": Object with keys matching these goals: ${JSON.stringify(intentGoalsResult.response_goals)}, each containing array of ${apiConfig.numTones || 3} SHORT tone names (1-2 words max) ranked by appropriateness for the relationship. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
-}
-
-Return ONLY valid JSON, no other text.`;
-
-        const toneDynamicMessages = [
-            {
-                role: 'system',
-                content: toneDynamicPrompt
-            },
-            {
-                role: 'user',
-                content: `=== SPECIFIC EMAIL BEING REPLIED TO ===
-${emailBeingRepliedTo}
-
-${previousThreadHistory ? `=== FULL THREAD HISTORY (for tone/dynamic analysis) ===\n${previousThreadHistory}` : '(No previous thread history available)'}`
-            }
-        ];
-
         let toneResult;
         try {
-            const toneData = await callProxyAPI(
-                apiConfig.provider,
-                classificationModel,
-                toneDynamicMessages,
-                0.3,
-                800
-            );
-            let toneContent = toneData.choices?.[0]?.message?.content || '{}';
-            toneContent = toneContent.trim();
-            if (toneContent.startsWith('```json')) {
-                toneContent = toneContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-            } else if (toneContent.startsWith('```')) {
-                toneContent = toneContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+            // Use new API endpoint for tone determination
+            const response = await fetch(`${VERCEL_PROXY_URL}/determine-tones-reply`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    emailContent: emailBeingRepliedTo,
+                    threadHistory: previousThreadHistory,
+                    intent: intentGoalsResult.intent,
+                    responseGoals: intentGoalsResult.response_goals,
+                    numTones: apiConfig.numTones || 3,
+                    provider: apiConfig.provider,
+                    model: classificationModel
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || `HTTP ${response.status}: ${response.statusText}`);
             }
-            toneResult = JSON.parse(toneContent);
+
+            toneResult = await response.json();
 
             // Clean and validate tone values - they should be short tone names, not full email text
             const cleanToneValue = (tone) => {
@@ -2875,62 +2921,31 @@ const injectGenerateButton = () => {
                         // For forwards, only use user's typed content (forwarded message is ignored)
                         let composeContext = `${composeSubject ? `Subject: ${composeSubject}\n` : ''}${composeRecipient ? `To: ${composeRecipient}\n` : ''}${composeBodyText ? `\nEmail content:\n${composeBodyText}` : ''}`;
 
-                        // Determine type from typed content (for NEW EMAIL drafting)
+                        // Determine type from typed content using new API endpoint
                         // CRITICAL: This is for NEW EMAIL drafting, not reply classification
                         // Match based on what YOU (the user) are drafting, not based on email direction
-                        const typePrompt = `You are an expert email classifier. Analyze the email content provided below and determine the most appropriate email type.
+                        const response = await fetch(`${VERCEL_PROXY_URL}/classify-draft-type`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                typedContent: composeBodyText,
+                                subject: composeSubject,
+                                recipient: composeRecipient,
+                                availablePackages: userPackages,
+                                confidenceThreshold: apiConfig.classificationConfidenceThreshold !== undefined ? apiConfig.classificationConfidenceThreshold : 0.85,
+                                provider: apiConfig.provider,
+                                model: classificationModel
+                            })
+                        });
 
-CRITICAL: This is for NEW EMAIL drafting. Match based on what YOU (the user) are drafting, not based on email direction. Each package description indicates when to use it based on YOUR role.
-
-Available email types:
-${userPackages.map(p =>
-                            `${p.name}: "${p.description}" (userIntent: ${p.userIntent}, roleDescription: ${p.roleDescription}, contextSpecific: ${p.contextSpecific})`
-                        ).join('\n')}
-
-Return ONLY a valid JSON object with exactly this structure:
-{
-  "matched_type": {
-    "name": string,                 // the package name (e.g., "sales")
-    "description": string,          // full description from the package
-    "userIntent": string,           // full userIntent from the package
-    "roleDescription": string,      // full roleDescription from the package
-    "contextSpecific": string       // full contextSpecific from the package
-  },
-  "confidence": number (0.0 to 1.0), // how strong the match is
-  "reason": string                  // brief explanation
-}
-
-Email content to classify:
-${composeContext}
-
-Rules:
-- Only choose from the listed packages above.
-- Match based on what YOU (the user) are drafting in the email content
-- Use the description and userIntent to determine which package matches YOUR role
-- Return the COMPLETE matched_type object including name, description, userIntent, roleDescription, and contextSpecific from the matched package.
-- Return ONLY valid JSON, no other text.`;
-
-                        const typeMessages = [
-                            { role: 'system', content: typePrompt }
-                        ];
-
-                        const typeData = await callProxyAPI(
-                            apiConfig.provider,
-                            classificationModel,
-                            typeMessages,
-                            0.3,
-                            800
-                        );
-
-                        let typeContent = typeData.choices?.[0]?.message?.content || '{}';
-                        typeContent = typeContent.trim();
-                        if (typeContent.startsWith('```json')) {
-                            typeContent = typeContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-                        } else if (typeContent.startsWith('```')) {
-                            typeContent = typeContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                        if (!response.ok) {
+                            const error = await response.json();
+                            throw new Error(error.error || `HTTP ${response.status}: ${response.statusText}`);
                         }
 
-                        const typeResult = JSON.parse(typeContent);
+                        const typeResult = await response.json();
                         const matchedTypeData = typeResult.matched_type;
                         const determinedTypeName = matchedTypeData && matchedTypeData.name ? matchedTypeData.name : (typeof typeResult.matched_type === 'string' ? typeResult.matched_type : null);
 
@@ -3264,34 +3279,36 @@ ${recipientDisplay !== '[Recipient]' ? `Dear ${recipientDisplay},` : 'Dear [Reci
 Best regards,
 ${userAccountName || '[Name]'}`;
 
-        const messages = [
-            {
-                role: 'system',
-                content: systemPrompt
-            },
-            {
-                role: 'user',
-                content: `Generate ${numVariants} professional ${platform === 'linkedin' ? 'LinkedIn message' : 'email'} draft variants${recipientName ? ` for ${recipientName}${recipientCompany ? ` at ${recipientCompany}` : ''}` : ' for [Recipient]'} based on the context provided.${!recipientName ? ' Use [Recipient] as placeholder for the recipient name.' : ''}`
-            }
-        ];
-
-        // Use streaming API for draft generation - provides faster time-to-first-token
+        // Use new streaming API endpoint for generic draft generation
         let draftText;
         try {
-            draftText = await callProxyAPIStream(
-                apiConfig.provider,
-                apiConfig.model,
-                messages,
-                0.8,  // temperature
-                800 * numVariants,  // max_tokens (increase for multiple variants)
-                // onChunk callback - called with each new chunk of content
+            const typedContent = `${composeSubject ? `Subject: ${composeSubject}\n` : ''}${composeRecipient ? `To: ${composeRecipient}\n` : ''}${bodyText ? `\nEmail content:\n${bodyText}` : ''}`;
+            
+            draftText = await callNewStreamingAPI(
+                `${VERCEL_PROXY_URL}/generate-drafts-draft`,
+                {
+                    typedContent: typedContent,
+                    package: genericPackage,
+                    variantSet: variantLabels,
+                    currentGoal: goal,
+                    goalTone: toneResult.tone_needed,
+                    recipientName: recipientName,
+                    recipientCompany: recipientCompany,
+                    userIntent: genericPackage.userIntent,
+                    keyTopics: [],
+                    writingStyle: null,
+                    enableStyleMimicking: false,
+                    platform: platform,
+                    provider: apiConfig.provider,
+                    model: apiConfig.model,
+                    temperature: 0.8,
+                    max_tokens: 2000
+                },
                 (fullContent, newChunk) => {
-                    // Call onComplete with partial content for incremental UI updates
                     if (onComplete) {
                         onComplete(fullContent, true); // true = isPartial
                     }
-                },
-                null  // abortSignal - could be added for cancellation support
+                }
             );
         } catch (fetchError) {
             // Handle network errors (CORS, connection issues, etc.)
@@ -3531,55 +3548,33 @@ To: ${composeRecipient || '(not provided)'}
 Email body: ${composeBodyText || '(not provided)'}`
             : '';
 
-        const goalsPrompt = `You are an expert email strategist. Based on the user's intent provided below${typedContentContext ? ' and the typed email content' : ''}, determine the most appropriate goals and strategies for composing a new email.
-
-The user's intent is: "${userIntent}"${typedContentContext}
-
-Return a JSON object with:
-{
-  "response_goals": Array of up to 5 most appropriate goals for composing this new email, ranked by suitability. These goals MUST be based on and directly address the sender intent provided above${typedContentContext ? ' and the specific typed content' : ''}. Each goal should be a specific action or strategy the sender should pursue to achieve that intent.
-  "goal_titles": Object with keys matching response_goals, each containing a short title (2-4 words max) suitable for a tab label.
-  "variant_sets": Object with keys matching response_goals, each containing array of exactly ${numVariants} specific variant labels ranked by relevance.
-  "recipient_name": string${recipientName ? ` - should be "${recipientName}"` : ' or null if not available'},
-  "recipient_company": string${recipientCompany ? ` - should be "${recipientCompany}"` : ' or null if not available'},
-  "key_topics": array of strings (max 5, potential topics to cover in the email based on the intent${typedContentContext ? ' and typed content' : ''})
-}
-
-Context:
-${recipientName ? `Recipient: ${recipientName}${recipientCompany ? ` at ${recipientCompany}` : ''}` : 'Recipient: [Recipient] (name not available)'}
-Platform: ${platform === 'linkedin' ? 'LinkedIn' : 'Email'}
-
-CRITICAL INSTRUCTIONS:
-- Use the sender intent provided above${typedContentContext ? ' AND the typed email content' : ''} to determine goals
-- Goals should be specific strategies/approaches for achieving the sender's intent${typedContentContext ? ' based on the actual content they typed' : ''}
-- Variants should represent different ways to pursue each goal
-- Key topics should reflect the actual content typed by the user
-- Return ONLY valid JSON, no other text.`;
-
-        const goalsMessages = [
-            {
-                role: 'system',
-                content: goalsPrompt
-            }
-        ];
-
         let intentGoalsResult;
         try {
-            const goalsData = await callProxyAPI(
-                apiConfig.provider,
-                classificationModel,
-                goalsMessages,
-                0.3,
-                1500
-            );
-            let goalsContent = goalsData.choices?.[0]?.message?.content || '{}';
-            goalsContent = goalsContent.trim();
-            if (goalsContent.startsWith('```json')) {
-                goalsContent = goalsContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-            } else if (goalsContent.startsWith('```')) {
-                goalsContent = goalsContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+            // Use new API endpoint for draft goals determination
+            const response = await fetch(`${VERCEL_PROXY_URL}/determine-goals-draft`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    typedContent: composeBodyText,
+                    package: matchedPackage,
+                    recipientName: recipientName,
+                    recipientCompany: recipientCompany,
+                    platform: platform,
+                    numGoals: apiConfig.numGoals || 5,
+                    numVariants: numVariants,
+                    provider: apiConfig.provider,
+                    model: classificationModel
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || `HTTP ${response.status}: ${response.statusText}`);
             }
-            intentGoalsResult = JSON.parse(goalsContent);
+
+            intentGoalsResult = await response.json();
         } catch (goalsError) {
             console.error('Goals determination error:', goalsError);
             // Fallback with generic values
@@ -3657,43 +3652,29 @@ CRITICAL INSTRUCTIONS:
         // ============================================================================
         // STEP 2: TONE DETERMINATION (simpler for new emails)
         // ============================================================================
-        const tonePrompt = `You are an expert at determining appropriate email tone. Based on the user's intent and goals, determine the optimal tone options for a new email.
-
-The user's intent is: "${userIntent}"
-The email goals are: ${JSON.stringify(intentGoalsResult.response_goals)}
-
-Return ONLY a JSON object with:
-{
-  "tone_needed": string (the single most appropriate default tone for this new email - must be a SHORT tone name, 1-2 words max, NOT a full sentence),
-  "tone_sets": Object with keys matching these goals: ${JSON.stringify(intentGoalsResult.response_goals)}, each containing array of ${apiConfig.numTones || 3} SHORT tone names (1-2 words max) ranked by appropriateness. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
-}
-
-Return ONLY valid JSON, no other text.`;
-
-        const toneMessages = [
-            {
-                role: 'system',
-                content: tonePrompt
-            }
-        ];
-
         let toneResult;
         try {
-            const toneData = await callProxyAPI(
-                apiConfig.provider,
-                classificationModel,
-                toneMessages,
-                0.3,
-                800
-            );
-            let toneContent = toneData.choices?.[0]?.message?.content || '{}';
-            toneContent = toneContent.trim();
-            if (toneContent.startsWith('```json')) {
-                toneContent = toneContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-            } else if (toneContent.startsWith('```')) {
-                toneContent = toneContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+            // Use new API endpoint for draft tone determination
+            const response = await fetch(`${VERCEL_PROXY_URL}/determine-tones-draft-specific`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    userIntent: userIntent,
+                    responseGoals: intentGoalsResult.response_goals,
+                    numTones: apiConfig.numTones || 3,
+                    provider: apiConfig.provider,
+                    model: classificationModel
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || `HTTP ${response.status}: ${response.statusText}`);
             }
-            toneResult = JSON.parse(toneContent);
+
+            toneResult = await response.json();
 
             // Clean and validate tone values - they should be short tone names, not full email text
             const cleanToneValue = (tone) => {
@@ -4195,36 +4176,69 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
 - Labels like "1. Friendly response" or "2. Insightful response" - just write the actual email text`;
         }
 
-        const messages = [
-            {
-                role: 'system',
-                content: finalSystemPrompt
-            },
-            {
-                role: 'user',
-                content: userContent
-            }
-        ];
-
         let draftsText;
         try {
-            // Use streaming API for draft generation - provides faster time-to-first-token
-            draftsText = await callProxyAPIStream(
-                apiConfig.provider,
-                apiConfig.model,
-                messages,
-                0.8,  // temperature
-                800,  // max_tokens
-                // onChunk callback - called with each new chunk of content
-                (fullContent, newChunk) => {
-                    // Call onComplete with partial content for incremental UI updates
-                    // The overlay will re-render with the partial content
-                    if (onComplete) {
-                        onComplete(fullContent, true); // true = isPartial
+            // Use new streaming API endpoint for draft generation
+            if (isNewEmail) {
+                // New email draft - use generate-drafts-draft endpoint
+                draftsText = await callNewStreamingAPI(
+                    `${VERCEL_PROXY_URL}/generate-drafts-draft`,
+                    {
+                        typedContent: classification.composeBodyText,
+                        package: matchedPackage,
+                        variantSet: variantSet,
+                        currentGoal: currentGoal,
+                        goalTone: goalTone,
+                        recipientName: classification.recipient_name,
+                        recipientCompany: classification.recipient_company,
+                        userIntent: userIntent,
+                        keyTopics: classification.key_topics,
+                        writingStyle: classification.writing_style,
+                        enableStyleMimicking: apiConfig.enableStyleMimicking,
+                        platform: platform,
+                        provider: apiConfig.provider,
+                        model: apiConfig.model,
+                        temperature: 0.8,
+                        max_tokens: 2000
+                    },
+                    (fullContent, newChunk) => {
+                        if (onComplete) {
+                            onComplete(fullContent, true); // true = isPartial
+                        }
                     }
-                },
-                null  // abortSignal - could be added for cancellation support
-            );
+                );
+            } else {
+                // Reply draft - use generate-drafts-reply endpoint
+                draftsText = await callNewStreamingAPI(
+                    `${VERCEL_PROXY_URL}/generate-drafts-reply`,
+                    {
+                        emailContent: emailBeingRepliedTo,
+                        threadHistory: previousThreadHistory,
+                        package: matchedPackage,
+                        variantSet: variantSet,
+                        currentGoal: currentGoal,
+                        goalTone: goalTone,
+                        recipientName: classification.recipient_name,
+                        recipientCompany: classification.recipient_company,
+                        subject: richContext.subject && richContext.subject !== 'LinkedIn Message' ? richContext.subject : undefined,
+                        senderName: senderName,
+                        intent: classification.intent,
+                        keyTopics: classification.key_topics,
+                        writingStyle: classification.writing_style,
+                        enableStyleMimicking: apiConfig.enableStyleMimicking,
+                        platform: platform,
+                        provider: apiConfig.provider,
+                        model: apiConfig.model,
+                        temperature: 0.8,
+                        max_tokens: 2000
+                    },
+                    (fullContent, newChunk) => {
+                        if (onComplete) {
+                            onComplete(fullContent, true); // true = isPartial
+                        }
+                    }
+                );
+            }
         } catch (fetchError) {
             // Handle network errors (CORS, connection issues, etc.)
             const networkError = fetchError.message || String(fetchError);
@@ -5134,26 +5148,35 @@ const createCommentButtonHandler = (editor) => {
                 } catch (e) { }
             }
 
-            // Call AI API to generate comment responses through Vercel proxy
-            const messages = [
+            // Use new streaming API endpoint for LinkedIn comment generation
+            // Note: LinkedIn comments use the same draft generation endpoint but with comment-specific context
+            const draftsText = await callNewStreamingAPI(
+                `${VERCEL_PROXY_URL}/generate-drafts-draft`,
                 {
-                    role: 'system',
-                    content: 'You are a helpful assistant that generates professional LinkedIn comment responses.'
+                    typedContent: commentContext || '',
+                    package: {
+                        name: 'generic',
+                        userIntent: 'Generate professional LinkedIn comment responses',
+                        roleDescription: 'Professional LinkedIn comment writer',
+                        contextSpecific: 'Generate engaging, professional comments for LinkedIn posts'
+                    },
+                    variantSet: ['Friendly', 'Insightful', 'Professional', 'Concise'],
+                    currentGoal: 'Generate appropriate comment',
+                    goalTone: 'Professional',
+                    recipientName: null,
+                    recipientCompany: null,
+                    userIntent: 'Generate professional LinkedIn comment responses',
+                    keyTopics: [],
+                    writingStyle: null,
+                    enableStyleMimicking: false,
+                    platform: 'linkedin',
+                    provider: apiConfig.provider,
+                    model: apiConfig.model,
+                    temperature: 0.7,
+                    max_tokens: 1000
                 },
-                {
-                    role: 'user',
-                    content: `LinkedIn post content:\n\n${postText}\n\n${commentContext ? `Current comment draft:\n${commentContext}\n\n` : ''}Please generate 4 complete comment response variants. Format each response as a complete comment ready to post. Separate each response with exactly "|||RESPONSE_VARIANT|||" on its own line.\n\n1. Friendly response\n|||RESPONSE_VARIANT|||\n2. Insightful response\n|||RESPONSE_VARIANT|||\n3. Professional response\n|||RESPONSE_VARIANT|||\n4. Concise response`
-                }
-            ];
-
-            const data = await callProxyAPI(
-                apiConfig.provider,
-                apiConfig.model,
-                messages,
-                0.7,  // temperature
-                1000  // max_tokens
+                null // No streaming updates for comments
             );
-            const draftsText = data.choices?.[0]?.message?.content || '';
             if (!draftsText) {
                 throw new Error('No response content received from API');
             }
