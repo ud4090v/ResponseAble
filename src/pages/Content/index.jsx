@@ -31,131 +31,6 @@ let apiConfig = {
 // Fixed separator for parsing response variants - must match what we instruct AI to use
 const RESPONSE_VARIANT_SEPARATOR = '|||RESPONSE_VARIANT|||';
 
-// Helper function to make API calls through Vercel proxy
-const callProxyAPI = async (provider, model, messages, temperature = 0.8, max_tokens = 1000) => {
-    try {
-        const response = await fetch(`${VERCEL_PROXY_URL}/generate`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                provider: provider,
-                model: model,
-                messages: messages,
-                temperature: temperature,
-                max_tokens: max_tokens
-            })
-        });
-
-        if (!response.ok) {
-            let errorData = {};
-            try {
-                errorData = await response.json();
-            } catch (e) {
-                errorData = { error: { message: response.statusText } };
-            }
-            const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
-            throw new Error(errorMessage);
-        }
-
-        return await response.json();
-    } catch (error) {
-        // Handle network errors (CORS, connection issues, etc.)
-        if (error.message.includes('Failed to fetch') || error.name === 'TypeError') {
-            throw new Error(`Unable to connect to Vercel proxy API. Please check:\n1. Your internet connection\n2. The Vercel proxy URL is correct: ${VERCEL_PROXY_URL}\n3. The Vercel deployment is live and accessible\n\nError: ${error.message}`);
-        }
-        // Re-throw other errors as-is
-        throw error;
-    }
-};
-
-// Helper function to make streaming API calls through Vercel proxy
-// Returns an async generator that yields content chunks as they arrive
-const callProxyAPIStream = async (provider, model, messages, temperature = 0.8, max_tokens = 1000, onChunk = null, abortSignal = null) => {
-    const response = await fetch(`${VERCEL_PROXY_URL}/generate`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            provider: provider,
-            model: model,
-            messages: messages,
-            temperature: temperature,
-            max_tokens: max_tokens,
-            stream: true
-        }),
-        signal: abortSignal
-    });
-
-    if (!response.ok) {
-        let errorData = {};
-        try {
-            errorData = await response.json();
-        } catch (e) {
-            errorData = { error: { message: response.statusText } };
-        }
-        const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
-        throw new Error(errorMessage);
-    }
-
-    // Read the stream
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullContent = '';
-    let buffer = '';
-
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-
-            if (done) {
-                break;
-            }
-
-            // Decode the chunk
-            buffer += decoder.decode(value, { stream: true });
-
-            // Process complete SSE frames (lines ending with \n\n)
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-
-                    if (data === '[DONE]') {
-                        continue;
-                    }
-
-                    try {
-                        const parsed = JSON.parse(data);
-                        const content = parsed.choices?.[0]?.delta?.content || '';
-
-                        if (content) {
-                            fullContent += content;
-                            if (onChunk) {
-                                onChunk(fullContent, content);
-                            }
-                        }
-                    } catch (e) {
-                        // Skip malformed JSON chunks
-                    }
-                }
-            }
-        }
-    } catch (error) {
-        if (error.name === 'AbortError') {
-            // Request was cancelled, return what we have
-            return fullContent;
-        }
-        throw error;
-    }
-
-    return fullContent;
-};
-
 // Helper function to call new streaming API endpoints
 const callNewStreamingAPI = async (url, body, onChunk = null, abortSignal = null) => {
     const response = await fetch(url, {
@@ -178,7 +53,7 @@ const callNewStreamingAPI = async (url, body, onChunk = null, abortSignal = null
         throw new Error(errorMessage);
     }
 
-    // Read the stream (same format as callProxyAPIStream)
+    // Read the stream (Server-Sent Events format)
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullContent = '';
@@ -3202,88 +3077,12 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
             ? `Use "${userAccountName}" as your name in the signature.`
             : `Use "[Name]" as placeholder for your name in the signature.`;
 
-        const numVariants = apiConfig.numVariants || 4;
-
-        const systemPrompt = platform === 'linkedin'
-            ? `You are a professional LinkedIn message writer. Generate exactly ${numVariants} complete, personalized message draft variants based on the context provided below. Each variant should have a different approach, tone, or style while addressing the same context.
-
-Context:
-${composeContext}
-
-CRITICAL INSTRUCTIONS:
-${recipientDisplay !== '[Recipient]' ? `- Address the recipient as "${recipientDisplay}"${recipientCompany ? ` from ${recipientCompany}` : ''} in your greeting.` : `- Use "[Recipient]" as placeholder for the recipient's name in your greeting.`}
-- ${signatureInstructions}
-- Use "[Company]" as placeholder for your company name if needed
-- Do NOT make up recipient names, company names, or your own name/company
-- Do NOT include signatures with made-up contact information
-- Base the drafts on the context provided above
-
-IMPORTANT FORMATTING REQUIREMENTS:
-- Generate ${numVariants} complete message drafts, each ready to send, including greeting, body text, and closing
-- Separate each draft with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
-- Do NOT include variant labels, numbers, or strategy names in the drafts
-- Start each message directly with the greeting
-- Keep each message under 150 words
-- Sound human, not robotic
-- Each variant should offer a different approach (e.g., more formal, more casual, more concise, more detailed, etc.)
-
-Example format:
-${recipientDisplay !== '[Recipient]' ? `Hi ${recipientDisplay},` : 'Hi [Recipient],'}
-
-[Message body text variant 1]
-
-Best regards,
-${userAccountName || '[Name]'}
-|||RESPONSE_VARIANT|||
-${recipientDisplay !== '[Recipient]' ? `Hi ${recipientDisplay},` : 'Hi [Recipient],'}
-
-[Message body text variant 2]
-
-Best regards,
-${userAccountName || '[Name]'}`
-
-            : `You are a professional email writer. Generate exactly ${numVariants} complete, personalized email draft variants based on the context provided below. Each variant should have a different approach, tone, or style while addressing the same context.
-
-Context:
-${composeContext}
-
-CRITICAL INSTRUCTIONS:
-${recipientDisplay !== '[Recipient]' ? `- Address the recipient as "${recipientDisplay}"${recipientCompany ? ` from ${recipientCompany}` : ''} in your greeting.` : `- Use "[Recipient]" as placeholder for the recipient's name in your greeting.`}
-- ${signatureInstructions}
-- Use "[Company]" as placeholder for your company name if needed
-- Do NOT make up recipient names, company names, or your own name/company
-- Do NOT include signatures with made-up contact information
-- Base the drafts on the context provided above
-
-IMPORTANT FORMATTING REQUIREMENTS:
-- Generate ${numVariants} complete email drafts, each ready to send, including greeting, body text, and closing
-- Separate each draft with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
-- Do NOT include variant labels, numbers, or strategy names in the drafts
-- Start each email directly with the greeting
-- Keep each email under 150 words
-- Sound human, not robotic
-- Each variant should offer a different approach (e.g., more formal, more casual, more concise, more detailed, etc.)
-
-Example format:
-${recipientDisplay !== '[Recipient]' ? `Dear ${recipientDisplay},` : 'Dear [Recipient],'}
-
-[Email body text variant 1]
-
-Best regards,
-${userAccountName || '[Name]'}
-|||RESPONSE_VARIANT|||
-${recipientDisplay !== '[Recipient]' ? `Dear ${recipientDisplay},` : 'Dear [Recipient],'}
-
-[Email body text variant 2]
-
-Best regards,
-${userAccountName || '[Name]'}`;
-
         // Use new streaming API endpoint for generic draft generation
+        // Note: systemPrompt and related prompt building code removed - prompts are now built server-side
         let draftText;
         try {
             const typedContent = `${composeSubject ? `Subject: ${composeSubject}\n` : ''}${composeRecipient ? `To: ${composeRecipient}\n` : ''}${bodyText ? `\nEmail content:\n${bodyText}` : ''}`;
-            
+
             draftText = await callNewStreamingAPI(
                 `${VERCEL_PROXY_URL}/generate-drafts-draft`,
                 {
@@ -3317,7 +3116,7 @@ ${userAccountName || '[Name]'}`;
             if (networkError.includes('Failed to fetch') || networkError.includes('NetworkError')) {
                 throw new Error(`Network error: Unable to connect to ${apiConfig.provider} API. Please check:\n1. Your internet connection\n2. CORS settings (if testing locally)\n3. API endpoint is accessible\n\nError: ${networkError}`);
             }
-            // Re-throw other errors (they're already formatted by callProxyAPI)
+            // Re-throw other errors (they're already formatted by the API)
             throw fetchError;
         }
 
@@ -3381,64 +3180,36 @@ ${userAccountName || '[Name]'}`;
                 await loadApiConfig();
                 const classificationModel = apiConfig.classificationModel || apiConfig.model;
 
-                const tonePrompt = `You are an expert at determining appropriate email tone. Based on the context provided below, determine the optimal tone options for a new email.
+                // Use new API endpoint for tone determination
+                const response = await fetch(`${VERCEL_PROXY_URL}/determine-tones-draft-generic`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        typedContent: bodyText || '',
+                        subject: subject || '',
+                        recipient: recipient || '',
+                        numTones: apiConfig.numTones || 3,
+                        provider: apiConfig.provider,
+                        model: classificationModel
+                    })
+                });
 
-Context:
-${composeContext}
-
-Return ONLY a JSON object with:
-{
-  "tone_needed": string (the single most appropriate default tone for this new email - must be a SHORT tone name, 1-2 words max, NOT a full sentence),
-  "tone_sets": Object with key "Generate appropriate draft", containing array of ${apiConfig.numTones || 3} SHORT tone names (1-2 words max) ranked by appropriateness. Each tone must be a SHORT descriptive word, NOT a full sentence or email content.
-}
-
-Return ONLY valid JSON, no other text.`;
-
-                const toneMessages = [
-                    {
-                        role: 'system',
-                        content: tonePrompt
-                    }
-                ];
-
-                const toneData = await callProxyAPI(
-                    apiConfig.provider,
-                    classificationModel,
-                    toneMessages,
-                    0.3,
-                    800
-                );
-                let toneContent = toneData.choices?.[0]?.message?.content || '{}';
-                toneContent = toneContent.trim();
-                if (toneContent.startsWith('```json')) {
-                    toneContent = toneContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-                } else if (toneContent.startsWith('```')) {
-                    toneContent = toneContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || `HTTP ${response.status}: ${response.statusText}`);
                 }
-                const parsedToneResult = JSON.parse(toneContent);
 
-                // Clean and validate tone values
-                const cleanToneValue = (tone) => {
-                    if (!tone || typeof tone !== 'string') return 'Professional';
-                    const trimmed = tone.trim();
-                    if (trimmed.length > 50) {
-                        const firstWord = trimmed.split(/\s+/)[0].toLowerCase();
-                        return firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
-                    }
-                    const words = trimmed.split(/\s+/).slice(0, 2);
-                    const cleaned = words.join(' ');
-                    const capitalized = cleaned.split(' ').map(word =>
-                        word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
-                    ).join(' ');
-                    return capitalized && capitalized.length <= 30 ? capitalized : 'Professional';
-                };
+                const parsedToneResult = await response.json();
 
+                // Update tone result with API response (tone values are already cleaned server-side)
                 if (parsedToneResult.tone_needed) {
-                    toneResult.tone_needed = cleanToneValue(parsedToneResult.tone_needed);
+                    toneResult.tone_needed = parsedToneResult.tone_needed;
                 }
 
                 if (parsedToneResult.tone_sets && parsedToneResult.tone_sets[goal]) {
-                    toneResult.tone_sets[goal] = parsedToneResult.tone_sets[goal].map(cleanToneValue).filter((t, i, arr) => arr.indexOf(t) === i);
+                    toneResult.tone_sets[goal] = parsedToneResult.tone_sets[goal];
                     // Ensure we have at least 2 tones for dropdown to show
                     if (toneResult.tone_sets[goal].length < 2) {
                         toneResult.tone_sets[goal] = defaultTones.slice(0, apiConfig.numTones || 3);
@@ -3823,137 +3594,6 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
         // Use provided tone if available (from tab switching), otherwise use first from tone_set or selectedTone
         const goalTone = classification._currentTone || (toneSet[0] || selectedTone);
 
-        // Build variant list from variant_set
-        const variantList = variantSet.map((v, i) => `${i + 1}. ${v}`).join('\n');
-
-        // Step 2: Build role-specific prompts based on classification
-        // Helper function to build prompts with variant list and classification context
-        const buildRolePrompt = (roleDescription, contextSpecific) => {
-            const variantCount = variantSet.length;
-            const keyTopicsText = classification.key_topics && Array.isArray(classification.key_topics) && classification.key_topics.length > 0
-                ? classification.key_topics.join(", ")
-                : "";
-            const intentText = classification.intent ? ` The sender's intent: ${classification.intent}.` : "";
-            const goalText = currentGoal ? ` Your email goal: ${currentGoal}.` : "";
-            const isNewEmail = classification.isNewEmail === true;
-
-            // Build style matching instructions from writing_style profile
-            // Only include style instructions if enableStyleMimicking is enabled
-            let styleInstructions = '';
-            if (apiConfig.enableStyleMimicking && classification.writing_style && classification.writing_style.sample_count > 0) {
-                const style = classification.writing_style;
-                const greetingExamples = style.greeting_patterns && style.greeting_patterns.length > 0
-                    ? ` Use greetings similar to: ${style.greeting_patterns.slice(0, 2).join(', ')}.`
-                    : '';
-                const closingExamples = style.closing_patterns && style.closing_patterns.length > 0
-                    ? ` Use closings similar to: ${style.closing_patterns.slice(0, 2).join(', ')}.`
-                    : '';
-
-                styleInstructions = `\n\nCRITICAL STYLE MATCHING: Match YOUR natural writing style based on your previous emails:
-- Formality level: ${style.formality}
-- Sentence structure: ${style.sentence_length} length sentences
-- Word choice: ${style.word_choice} complexity vocabulary
-- Punctuation style: ${style.punctuation_style}
-- Uses emojis: ${style.usesEmojis ? 'yes' : 'no'}
-- Frequently uses exclamations: ${style.usesExclamations ? 'yes' : 'no'}
-- Typical greeting: ${style.startsWithGreeting ? 'yes' : 'no'}
-- Typical sign-off: ${style.endsWithSignOff ? 'yes' : 'no'}${greetingExamples}${closingExamples}
-Write in a way that sounds like YOU wrote it, matching your typical communication style.`;
-            }
-
-            if (isNewEmail) {
-                // New email prompt
-                const recipientDisplay = classification.recipient_name && classification.recipient_name !== '[Recipient]'
-                    ? classification.recipient_name
-                    : '[Recipient]';
-                const recipientCompanyText = classification.recipient_company
-                    ? ` at ${classification.recipient_company}`
-                    : '';
-
-                // Include typed content if available (forwarded messages are ignored)
-                const typedContentSection = (classification.composeSubject || classification.composeBodyText || classification.composeRecipient)
-                    ? `\n\nTYPED EMAIL CONTENT (use this as the basis for your drafts):
-Subject: ${classification.composeSubject || '(not provided)'}
-To: ${classification.composeRecipient || '(not provided)'}
-Email body: ${classification.composeBodyText || '(not provided)'}
-
-CRITICAL: The drafts MUST be based on and incorporate the typed content above. Use the typed content as the foundation for your email drafts, expanding and refining it according to the variant strategies.`
-                    : '';
-
-                return `You are ${roleDescription}. Generate exactly ${variantCount} complete, personalized new email drafts. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Address this email to ${recipientDisplay}${recipientCompanyText}.${keyTopicsText ? ` Key topics to consider: ${keyTopicsText}.` : ""} ${contextSpecific}${styleInstructions}${typedContentSection}
-
-CRITICAL INSTRUCTIONS FOR NEW EMAILS:
-${recipientDisplay !== '[Recipient]' ? `- Address the recipient as "${recipientDisplay}"${recipientCompanyText ? ` from ${classification.recipient_company}` : ''} in your greeting.` : `- Use "[Recipient]" as placeholder for the recipient's name in your greeting (e.g., "Hi [Recipient]," or "Dear [Recipient],").`}
-- Do NOT make up recipient names, company names, or your own name/company
-- Do NOT include signatures with made-up contact information
-- Use "[Name]" as placeholder for your name if not available
-- Use "[Company]" as placeholder for your company name if needed
-${typedContentSection ? '- Base your drafts on the typed content provided above, expanding and refining it according to each variant strategy' : ''}
-
-IMPORTANT FORMATTING REQUIREMENTS:
-- Each variant should be a complete email ready to send, including greeting, body text, and closing
-- Do NOT include variant labels, numbers, or strategy names in the response text
-- Start each email directly with the greeting
-- Separate each complete email response with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
-- Keep each email under 150 words
-- Sound human, not robotic
-
-Example format:
-${recipientDisplay !== '[Recipient]' ? `Hi ${recipientDisplay},` : 'Hi [Recipient],'}
-
-[Email body text]
-
-Best regards,
-[Name]
-
-|||RESPONSE_VARIANT|||
-
-${recipientDisplay !== '[Recipient]' ? `Hi ${recipientDisplay},` : 'Hi [Recipient],'}
-
-[Email body text]
-
-Best regards,
-[Name]`;
-            } else {
-                // Reply prompt
-                return `You are ${roleDescription}. Generate exactly ${variantCount} complete, personalized reply options based on the source email provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"}${classification.recipient_company ? ` at ${classification.recipient_company}` : ""}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""} ${contextSpecific}${styleInstructions}
-
-CRITICAL CONTEXT HANDLING:
-- You will receive TWO sections: "EMAIL BEING REPLIED TO" and optionally "PREVIOUS THREAD HISTORY"
-- The "EMAIL BEING REPLIED TO" is the SPECIFIC email the user clicked "Reply" on - this could be ANY email in the thread, not necessarily the latest
-- The thread history is ONLY for understanding the broader conversation context - DO NOT respond to topics from thread history
-
-RESPONSE RULES:
-- Directly address ONLY the content, questions, and intent of the "EMAIL BEING REPLIED TO" section
-- If the specific email asks a simple question, give a direct answer to that question
-- DO NOT bring up topics from thread history unless they are directly relevant to answering the specific email
-- Your response must ONLY address what the sender said in the "EMAIL BEING REPLIED TO" section
-
-IMPORTANT FORMATTING REQUIREMENTS:
-- Each variant should be a complete email ready to send, including greeting, body text, and closing
-- Do NOT include variant labels, numbers, or strategy names in the response text
-- Start each email directly with the greeting
-- Separate each complete email response with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
-- Keep each reply under 150 words
-- Sound human, not robotic
-
-Example format:
-Dear [Name],
-
-[Email body text]
-
-Best regards,
-
-|||RESPONSE_VARIANT|||
-
-Dear [Name],
-
-[Email body text]
-
-Best regards,`;
-            }
-        };
-
         // Get user-selected packages from storage (defaults to base package if none selected)
         const userPackages = await getUserPackages();
 
@@ -3966,169 +3606,6 @@ Best regards,`;
         // Extract userIntent early to avoid initialization issues
         const userIntent = matchedPackage && matchedPackage.userIntent ? matchedPackage.userIntent : '';
 
-        // For new emails, derive role and context from userIntent instead of reply-focused roleDescription
-        let roleDescription, contextSpecific;
-        if (isNewEmail && matchedPackage && userIntent) {
-            // For new emails, create role description from userIntent perspective
-            // The userIntent describes what the user is doing, so we derive the role from that
-
-            // Derive role description from userIntent
-            if (classification.type === 'recruitment') {
-                // Recruitment package is FOR recruiters - userIntent is from recruiter's perspective
-                roleDescription = "a professional recruiter reaching out to potential candidates";
-                contextSpecific = `You are a recruiter reaching out to a potential candidate. ${userIntent} Focus on: introducing the opportunity clearly, highlighting what makes the role attractive, addressing candidate qualifications and fit, showcasing company values, and setting clear next steps in the hiring process. Be professional, engaging, and respectful of the candidate's time.`;
-            } else if (classification.type === 'sales') {
-                // Sales package covers both seller and buyer perspectives
-                // The userIntent and context will help determine the appropriate perspective
-                // For new emails, default to seller perspective (most common), but the AI can adapt based on goals/context
-                roleDescription = "a professional sales or procurement email writer";
-                contextSpecific = `You are engaging in a sales-related conversation. ${userIntent} If you are the seller: focus on understanding customer needs, presenting value propositions, addressing objections, building rapport, and guiding toward the next step. If you are the customer/buyer: focus on asking clear questions about products/services, negotiating terms, following up on deals, expressing needs or concerns, and moving toward a purchase decision. Adapt your approach based on your role in the conversation.`;
-            } else if (classification.type === 'jobseeker') {
-                // Jobseeker package is FOR job seekers - userIntent is from job seeker's perspective
-                roleDescription = "a job seeker reaching out to potential employers";
-                contextSpecific = `You are a job seeker reaching out to a potential employer or contact. ${userIntent} Focus on: expressing genuine interest, showcasing relevant qualifications and experience, demonstrating value you can bring, asking thoughtful questions, and requesting next steps professionally. Be confident but humble.`;
-            } else if (classification.type === 'support') {
-                // Support package covers both customer and support desk perspectives
-                roleDescription = "a professional customer support specialist or customer seeking support";
-                contextSpecific = `You are engaging in a support-related conversation. ${userIntent} If you are the customer: focus on clearly describing your issue, providing relevant details, asking questions, and following up on resolutions. If you are the support desk: focus on acknowledging the issue clearly, providing helpful solutions, setting expectations for resolution, being empathetic and professional, and ensuring customer satisfaction. Adapt your approach based on your role in the conversation.`;
-            } else if (classification.type === 'networking') {
-                roleDescription = "a professional building genuine connections";
-                contextSpecific = `You are reaching out to build a professional relationship. ${userIntent} Focus on: establishing rapport, finding mutual value, being authentic and genuine, respecting their time, and proposing clear next steps for collaboration or connection.`;
-            } else {
-                // Generic - use userIntent to create appropriate role
-                roleDescription = "a professional email writer";
-                contextSpecific = `You are composing a professional email. ${userIntent} Focus on: clear communication, appropriate tone, professional courtesy, and achieving your stated intent.`;
-            }
-        } else {
-            // For replies, use the existing roleDescription and contextSpecific
-            if (matchedPackage) {
-                roleDescription = matchedPackage.roleDescription;
-                contextSpecific = matchedPackage.contextSpecific;
-            } else {
-                // Fallback if matchedPackage is somehow undefined (shouldn't happen, but defensive)
-                const fallbackPackage = userPackages.find(p => p.base); // getUserPackages() always includes base package
-                if (fallbackPackage) {
-                    roleDescription = fallbackPackage.roleDescription;
-                    contextSpecific = fallbackPackage.contextSpecific;
-                } else {
-                    // Ultimate fallback (should never reach here)
-                    roleDescription = 'a professional email reply writer';
-                    contextSpecific = 'Respond appropriately from the recipient\'s perspective.';
-                }
-            }
-        }
-
-        // Build type-specific context instructions
-        const intentContext = classification.intent ? ` The sender's intent: ${classification.intent}.` : '';
-
-        // Build role prompt dynamically using matched type's roleDescription and contextSpecific
-        const dynamicContextSpecific = `${contextSpecific}${intentContext}`;
-        const rolePrompt = buildRolePrompt(roleDescription, dynamicContextSpecific);
-
-        const intentText = classification.intent ? ` The sender's intent: ${classification.intent}.` : "";
-        const goalText = currentGoal ? ` Your response goal: ${currentGoal}.` : "";
-        const keyTopicsText = classification.key_topics && Array.isArray(classification.key_topics) && classification.key_topics.length > 0
-            ? classification.key_topics.join(", ")
-            : "";
-
-        // Build style matching instructions for LinkedIn
-        // Only include style instructions if enableStyleMimicking is enabled
-        let linkedinStyleInstructions = '';
-        if (apiConfig.enableStyleMimicking && classification.writing_style && classification.writing_style.sample_count > 0) {
-            const style = classification.writing_style;
-            const greetingExamples = style.greeting_patterns && style.greeting_patterns.length > 0
-                ? ` Use greetings similar to: ${style.greeting_patterns.slice(0, 2).join(', ')}.`
-                : '';
-            const closingExamples = style.closing_patterns && style.closing_patterns.length > 0
-                ? ` Use closings similar to: ${style.closing_patterns.slice(0, 2).join(', ')}.`
-                : '';
-
-            linkedinStyleInstructions = `\n\nCRITICAL STYLE MATCHING: Match YOUR natural writing style based on your previous messages:
-- Formality level: ${style.formality}
-- Sentence structure: ${style.sentence_length} length sentences
-- Word choice: ${style.word_choice} complexity vocabulary
-- Punctuation style: ${style.punctuation_style}
-- Uses emojis: ${style.usesEmojis ? 'yes' : 'no'}
-- Frequently uses exclamations: ${style.usesExclamations ? 'yes' : 'no'}
-- Typical greeting: ${style.startsWithGreeting ? 'yes' : 'no'}
-- Typical sign-off: ${style.endsWithSignOff ? 'yes' : 'no'}${greetingExamples}${closingExamples}
-Write in a way that sounds like YOU wrote it, matching your typical communication style.`;
-        }
-
-        const systemPrompt = platform === 'linkedin'
-            ? (isNewEmail
-                ? `You are a professional LinkedIn message writer. Generate exactly ${variantSet.length} complete, personalized new message drafts. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Address this message to ${classification.recipient_name || "[Recipient]"}${classification.recipient_company ? ` at ${classification.recipient_company}` : ''}.${keyTopicsText ? ` Key topics to consider: ${keyTopicsText}.` : ""}${linkedinStyleInstructions}
-
-CRITICAL INSTRUCTIONS FOR NEW MESSAGES:
-${classification.recipient_name && classification.recipient_name !== '[Recipient]' ? `- Address the recipient as "${classification.recipient_name}"${classification.recipient_company ? ` from ${classification.recipient_company}` : ''} in your greeting.` : `- Use "[Recipient]" as placeholder for the recipient's name in your greeting.`}
-- Do NOT make up recipient names, company names, or your own name/company
-- Do NOT include signatures with made-up contact information
-- Use "[Name]" as placeholder for your name if not available
-
-IMPORTANT FORMATTING REQUIREMENTS:
-- Each variant should be a complete message ready to send, including greeting, body text, and closing
-- Do NOT include variant labels, numbers, or strategy names in the response text
-- Start each message directly with the greeting
-- Separate each complete message response with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
-- Keep it professional, concise, and under 150 words
-- Sound human, not robotic
-
-Example format:
-Hi ${classification.recipient_name || '[Recipient]'},
-
-[Message body text]
-
-Best regards,
-[Name]
-
-|||RESPONSE_VARIANT|||
-
-Hi ${classification.recipient_name || '[Recipient]'},
-
-[Message body text]
-
-Best regards,
-[Name]`
-                : `You are a professional LinkedIn message writer. Generate exactly ${variantSet.length} complete, personalized reply options based on the source message provided. The variant strategies are: ${variantList}. Use a ${goalTone} tone.${intentText}${goalText} Personalize for ${classification.recipient_name || "the recipient"} at ${classification.recipient_company || "their company"}.${keyTopicsText ? ` Key topics: ${keyTopicsText}.` : ""}${linkedinStyleInstructions}
-
-CRITICAL CONTEXT HANDLING:
-- You will receive TWO sections: "MESSAGE BEING REPLIED TO" and optionally "PREVIOUS CONVERSATION HISTORY"
-- The "MESSAGE BEING REPLIED TO" is the SPECIFIC message the user clicked "Reply" on - this could be ANY message in the conversation, not necessarily the latest
-- The conversation history is ONLY for understanding the broader context - DO NOT respond to topics from conversation history
-
-RESPONSE RULES:
-- Directly address ONLY the content, questions, and intent of the "MESSAGE BEING REPLIED TO" section
-- If the specific message asks a simple question, give a direct answer to that question
-- DO NOT bring up topics from conversation history unless they are directly relevant to answering the specific message
-- Your response must ONLY address what the sender said in the "MESSAGE BEING REPLIED TO" section
-
-IMPORTANT FORMATTING REQUIREMENTS:
-- Each variant should be a complete message ready to send, including greeting, body text, and closing
-- Do NOT include variant labels, numbers, or strategy names in the response text
-- Start each message directly with the greeting
-- Separate each complete message response with exactly "|||RESPONSE_VARIANT|||" on its own line (CRITICAL: use this exact separator, do not modify it)
-- Keep it professional, concise, and under 150 words
-- Sound human, not robotic
-
-Example format:
-Hi [Name],
-
-[Message body text]
-
-Best regards,
-
-|||RESPONSE_VARIANT|||
-
-Hi [Name],
-
-[Message body text]
-
-Best regards,`)
-            : rolePrompt;
-
-        // Note: Personalization is now included in the role prompts, so we don't need to add it separately
-        const finalSystemPrompt = systemPrompt;
-
         // Extract the actual email being replied to and thread history separately
         // sourceMessageText is the ACTUAL email being replied to (the specific one, not necessarily latest)
         // Use threadHistory from regenerateContext if available (it excludes the email being replied to)
@@ -4138,43 +3615,6 @@ Best regards,`)
             : (richContext.thread && richContext.thread !== 'New message'
                 ? richContext.thread
                 : '');
-
-        // Build messages array for API call
-        let userContent;
-
-        if (isNewEmail) {
-            // New email - no source message or thread history
-            userContent = `Generate ${variantSet.length} professional ${platform === 'linkedin' ? 'LinkedIn message' : 'email'} drafts${classification.recipient_name && classification.recipient_name !== '[Recipient]' ? ` for ${classification.recipient_name}${classification.recipient_company ? ` at ${classification.recipient_company}` : ''}` : ' for [Recipient]'}. Each draft should use a different approach from the variant strategies provided.${!classification.recipient_name || classification.recipient_name === '[Recipient]' ? ' Use [Recipient] as placeholder for the recipient name.' : ''}
-
-${classification.recipient_name && classification.recipient_name !== '[Recipient]' ? `Recipient: ${classification.recipient_name}${classification.recipient_company ? ` (${classification.recipient_company})` : ''}` : 'Recipient: [Recipient] (name not available)'}
-
-CRITICAL - Do NOT include in your response:
-- A subject line (it's already set)
-- Your signature, name, email address, phone number, or company name (${platform === 'gmail' ? 'Gmail will automatically add your signature' : 'signatures are not needed'})
-- Made-up names, companies, or contact information
-- Generic greetings like "Hi Google" or "Hello there"${classification.recipient_name && classification.recipient_name !== '[Recipient]' ? ` - use "${classification.recipient_name}"` : ' - use [Recipient] as placeholder'}
-- Any text after the closing (no signatures, no contact info)
-- Labels like "1. Friendly response" or "2. Insightful response" - just write the actual email text`;
-        } else {
-            // Reply - include source message and thread history
-            userContent = `=== EMAIL BEING REPLIED TO (YOU ARE REPLYING TO THIS - IGNORE EVERYTHING ELSE BELOW) ===
-${emailBeingRepliedTo}
-
-${previousThreadHistory ? `=== PREVIOUS THREAD HISTORY (IGNORE THIS - FOR BACKGROUND CONTEXT ONLY) ===
-${previousThreadHistory}
-
-REMINDER: You are replying to the "EMAIL BEING REPLIED TO" section above. DO NOT respond to anything in the thread history. The thread history is only for understanding background context, NOT for determining what to respond to.
-
-` : ''}${richContext.recipientName || richContext.to ? `Recipient: ${richContext.recipientName || richContext.to}${richContext.recipientCompany ? ` (${richContext.recipientCompany})` : ''}` : ''}${richContext.subject && richContext.subject !== 'LinkedIn Message' ? `\nSubject: ${richContext.subject}` : ''}
-
-${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platform === 'linkedin' ? 'message' : 'email'} is named "${senderName || recipientName}"${recipientCompany ? ` from ${recipientCompany}` : ''}. You are replying TO them. Address them by their actual name "${senderName || recipientName}" in your greeting. Do NOT use "Google", "Hi there", "Hello", or any generic greeting - use their actual name "${senderName || recipientName}".\n\n` : 'IMPORTANT: Extract the sender\'s name from the email above and use it in your greeting. Do NOT use generic greetings like "Hi Google" or "Hello there".\n\n'}CRITICAL - Do NOT include in your response:
-- A subject line (it's already set)
-- Your signature, name, email address, phone number, or company name (${platform === 'gmail' ? 'Gmail will automatically add your signature' : 'signatures are not needed'})
-- Made-up names, companies, or contact information
-- Generic greetings like "Hi Google" or "Hello there" - use the actual sender's name
-- Any text after the closing (no signatures, no contact info)
-- Labels like "1. Friendly response" or "2. Insightful response" - just write the actual email text`;
-        }
 
         let draftsText;
         try {
@@ -4212,17 +3652,15 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
                 draftsText = await callNewStreamingAPI(
                     `${VERCEL_PROXY_URL}/generate-drafts-reply`,
                     {
-                        emailContent: emailBeingRepliedTo,
-                        threadHistory: previousThreadHistory,
+                        emailBeingRepliedTo: emailBeingRepliedTo,
+                        previousThreadHistory: previousThreadHistory,
                         package: matchedPackage,
                         variantSet: variantSet,
                         currentGoal: currentGoal,
                         goalTone: goalTone,
-                        recipientName: classification.recipient_name,
-                        recipientCompany: classification.recipient_company,
-                        subject: richContext.subject && richContext.subject !== 'LinkedIn Message' ? richContext.subject : undefined,
-                        senderName: senderName,
-                        intent: classification.intent,
+                        recipientName: senderName || recipientName,
+                        recipientCompany: recipientCompany,
+                        userIntent: userIntent,
                         keyTopics: classification.key_topics,
                         writingStyle: classification.writing_style,
                         enableStyleMimicking: apiConfig.enableStyleMimicking,
@@ -4246,7 +3684,7 @@ ${senderName || recipientName ? `IMPORTANT: The person who sent you this ${platf
             if (networkError.includes('Failed to fetch') || networkError.includes('NetworkError')) {
                 throw new Error(`Network error: Unable to connect to ${apiConfig.provider} API. Please check:\n1. Your internet connection\n2. CORS settings (if testing locally)\n3. API endpoint is accessible\n\nError: ${networkError}`);
             }
-            // Re-throw other errors (they're already formatted by callProxyAPI)
+            // Re-throw other errors (they're already formatted by the API)
             throw fetchError;
         }
 
@@ -4396,6 +3834,89 @@ const updateStreamingOverlay = (content) => {
     return true;
 };
 
+// Show drafts overlay with formatted content
+
+// Get user-selected packages from storage (defaults to base package if none selected)
+const userPackages = await getUserPackages();
+
+// Get matched type from userPackages based on classification.type
+const matchedPackage = userPackages.find(p => p.name === classification.type) || userPackages.find(p => p.base); // getUserPackages() always includes base package
+
+// Check if this is a new email
+const isNewEmail = classification.isNewEmail === true;
+
+// Extract userIntent early to avoid initialization issues
+const userIntent = matchedPackage && matchedPackage.userIntent ? matchedPackage.userIntent : '';
+
+// Extract the actual email being replied to and thread history separately
+// sourceMessageText is the ACTUAL email being replied to (the specific one, not necessarily latest)
+// Use threadHistory from regenerateContext if available (it excludes the email being replied to)
+const emailBeingRepliedTo = sourceMessageText || '';
+const previousThreadHistory = (regenerateContext && regenerateContext.threadHistory)
+    ? regenerateContext.threadHistory
+    : (richContext.thread && richContext.thread !== 'New message'
+        ? richContext.thread
+        : '');
+
+let draftsText;
+try {
+    // Use new streaming API endpoint for draft generation
+    if (isNewEmail) {
+        // New email draft - use generate-drafts-draft endpoint
+        draftsText = await callNewStreamingAPI(
+            `${VERCEL_PROXY_URL}/generate-drafts-draft`,
+            {
+                typedContent: classification.composeBodyText,
+                package: matchedPackage,
+                variantSet: variantSet,
+                currentGoal: currentGoal,
+                goalTone: goalTone,
+                recipientName: classification.recipient_name,
+                recipientCompany: classification.recipient_company,
+                userIntent: userIntent,
+                keyTopics: classification.key_topics,
+                writingStyle: classification.writing_style,
+                enableStyleMimicking: apiConfig.enableStyleMimicking,
+                platform: platform,
+                provider: apiConfig.provider,
+                model: apiConfig.model,
+                temperature: 0.8,
+                max_tokens: 2000
+            },
+            (fullContent, newChunk) => {
+                if (onComplete) {
+                    onComplete(fullContent, true); // true = isPartial
+                }
+            }
+        );
+    } else {
+        // Reply draft - use generate-drafts-reply endpoint
+        draftsText = await callNewStreamingAPI(
+            `${VERCEL_PROXY_URL}/generate-drafts-reply`,
+            {
+                emailContent: emailBeingRepliedTo,
+                threadHistory: previousThreadHistory,
+                package: matchedPackage,
+                variantSet: variantSet,
+                currentGoal: currentGoal,
+                goalTone: goalTone,
+                recipientName: classification.recipient_name,
+                recipientCompany: classification.recipient_company,
+                subject: richContext.subject && richContext.subject !== 'LinkedIn Message' ? richContext.subject : undefined,
+                senderName: senderName,
+                intent: classification.intent,
+                keyTopics: classification.key_topics,
+                writingStyle: classification.writing_style,
+                enableStyleMimicking: apiConfig.enableStyleMimicking,
+            }
+        );
+    }
+} catch (error) {
+    console.error('Error generating drafts:', error);
+    throw error;
+}
+
+// Show drafts overlay with formatted content
 const showDraftsOverlay = async (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null, newEmailParams = null, isPartial = false) => {
     // For partial (streaming) updates, just update the streaming content
     if (isPartial) {
