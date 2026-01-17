@@ -4893,6 +4893,21 @@ const createCommentButtonHandler = (editor) => {
                 } catch (e) { }
             }
 
+            // Show streaming overlay immediately for instant feedback
+            const iconUrl = runtime?.getURL ? runtime.getURL('icon-128.png') : null;
+            showStreamingOverlay('', iconUrl);
+
+            // Create a custom adapter for comment insertion
+            const commentAdapter = {
+                insertText: (text) => {
+                    editor.focus();
+                    editor.innerHTML = '';
+                    editor.innerText = text;
+                    const inputEvent = new Event('input', { bubbles: true });
+                    editor.dispatchEvent(inputEvent);
+                }
+            };
+
             // Use new streaming API endpoint for LinkedIn comment generation
             // Note: LinkedIn comments use the same draft generation endpoint but with comment-specific context
             const draftsText = await callNewStreamingAPI(
@@ -4920,22 +4935,17 @@ const createCommentButtonHandler = (editor) => {
                     temperature: 0.7,
                     max_tokens: 1000
                 },
-                null // No streaming updates for comments
+                (fullContent, newChunk) => {
+                    // Update streaming overlay with partial content
+                    updateStreamingOverlay(fullContent);
+                }
             );
             if (!draftsText) {
                 throw new Error('No response content received from API');
             }
 
-            // Create a custom adapter for comment insertion
-            const commentAdapter = {
-                insertText: (text) => {
-                    editor.focus();
-                    editor.innerHTML = '';
-                    editor.innerText = text;
-                    const inputEvent = new Event('input', { bubbles: true });
-                    editor.dispatchEvent(inputEvent);
-                }
-            };
+            // Remove streaming overlay before showing final drafts
+            document.querySelector('.responseable-overlay.responseable-streaming')?.remove();
 
             // Show drafts overlay with comment adapter
             (async () => {
@@ -4971,6 +4981,8 @@ const createCommentButtonHandler = (editor) => {
                 restoreButton();
             }, 30000);
         } catch (err) {
+            // Remove streaming overlay on error
+            document.querySelector('.responseable-overlay.responseable-streaming')?.remove();
             alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
             // Restore button
             commentButton.innerHTML = '';
