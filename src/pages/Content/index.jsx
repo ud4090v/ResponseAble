@@ -1437,8 +1437,9 @@ const platformAdapters = {
         },
         // Multi-factor detection: Check if compose action is Reply, Forward, or New Email
         // Priority: Attribution line > Content patterns > DOM structure > Subject line
-        detectComposeAction: () => {
-            const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
+        // Optional scopedComposeBody parameter allows scoping detection to a specific compose box
+        detectComposeAction: (scopedComposeBody = null) => {
+            const composeBody = scopedComposeBody || document.querySelector('div[aria-label="Message Body"][role="textbox"]');
             if (!composeBody) return 'new';
 
             const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') ||
@@ -2614,10 +2615,30 @@ const injectGenerateButton = () => {
             // Get context for API call using enhanced context extraction
             const richContext = getRichContext();
 
+            // Find the compose body associated with THIS button (not a global search)
+            // This fixes issues when multiple compose windows are open
+            let scopedComposeBody = null;
+            if (platform === 'gmail') {
+                // Find the compose container that contains this button, then find its compose body
+                const buttonContainer = generateButton.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP, form');
+                if (buttonContainer) {
+                    scopedComposeBody = buttonContainer.querySelector('div[aria-label="Message Body"][role="textbox"]');
+                }
+                // Fallback: try to find compose body near the send button
+                if (!scopedComposeBody) {
+                    const toolbar = sendButton.parentElement;
+                    const formContainer = toolbar?.closest('form, .nH, .aO9, [role="dialog"]');
+                    if (formContainer) {
+                        scopedComposeBody = formContainer.querySelector('div[aria-label="Message Body"][role="textbox"]');
+                    }
+                }
+            }
+
             // Use multi-factor detection to determine compose action type
+            // Pass the scoped compose body to ensure we detect the correct compose window
             let composeAction = 'new';
             if (adapter.detectComposeAction) {
-                composeAction = adapter.detectComposeAction();
+                composeAction = adapter.detectComposeAction(scopedComposeBody);
             } else {
                 // Fallback to old method if detectComposeAction not available
                 if (adapter.isReply && adapter.isReply()) {
