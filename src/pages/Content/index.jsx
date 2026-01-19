@@ -519,7 +519,8 @@ const getCompactPackageInfo = (pkg) => {
 };
 
 // Email classification function - uses AI to classify email type and extract entities
-const classifyEmail = async (richContext, sourceMessageText, platform, threadHistory = '', senderName = null) => {
+// onProgress callback is called with { step: 'type'|'goals'|'tone', data: {...} } as each step completes
+const classifyEmail = async (richContext, sourceMessageText, platform, threadHistory = '', senderName = null, onProgress = null) => {
     try {
         await loadApiConfig();
 
@@ -644,6 +645,11 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
 
         const packageName = matchedType.name;
         const typeIntent = matchedType.intent;
+
+        // Report type determination progress
+        if (onProgress) {
+            onProgress({ step: 'type', data: { type: packageName, confidence: typeMatchResult.confidence } });
+        }
 
         // ============================================================================
         // STEP 2: INTENT/GOALS DETERMINATION - FOCUS_EMAIL ONLY (COMPLETELY ISOLATED)
@@ -809,6 +815,18 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
             }
         }
 
+        // Report goals determination progress
+        if (onProgress) {
+            onProgress({
+                step: 'goals',
+                data: {
+                    intent: intentGoalsResult.intent,
+                    response_goals: intentGoalsResult.response_goals,
+                    goal_titles: intentGoalsResult.goal_titles
+                }
+            });
+        }
+
         // ============================================================================
         // STEP 3: TONE/DYNAMIC DETERMINATION - CAN USE FULL THREAD
         // ============================================================================
@@ -886,6 +904,18 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
                 tone_needed: 'Professional and friendly',
                 tone_sets: {}
             };
+        }
+
+        // Report tone determination progress
+        if (onProgress) {
+            onProgress({
+                step: 'tone',
+                data: {
+                    tone_needed: toneResult.tone_needed || 'Professional',
+                    tone_sets: toneResult.tone_sets || {},
+                    currentGoal: intentGoalsResult.response_goals?.[0] || null
+                }
+            });
         }
 
         // ============================================================================
@@ -1407,8 +1437,9 @@ const platformAdapters = {
         },
         // Multi-factor detection: Check if compose action is Reply, Forward, or New Email
         // Priority: Attribution line > Content patterns > DOM structure > Subject line
-        detectComposeAction: () => {
-            const composeBody = document.querySelector('div[aria-label="Message Body"][role="textbox"]');
+        // Optional scopedComposeBody parameter allows scoping detection to a specific compose box
+        detectComposeAction: (scopedComposeBody = null) => {
+            const composeBody = scopedComposeBody || document.querySelector('div[aria-label="Message Body"][role="textbox"]');
             if (!composeBody) return 'new';
 
             const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') ||
@@ -1474,17 +1505,22 @@ const platformAdapters = {
             }
 
             // PRIORITY 3: Check DOM structure
+            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 3: Checking DOM structure');
             if (composeContainer) {
                 const quotedContent = composeContainer.querySelector('div.gmail_quote, blockquote');
+                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 3: quotedContent found:', !!quotedContent);
                 if (quotedContent) {
                     const quoteText = quotedContent.innerText || quotedContent.textContent || '';
+                    console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 3: quoteText length:', quoteText.length);
                     // Check if it looks like a forward (has forward headers but no "wrote:")
                     if (/Forwarded message|Original Message|From:\s+.+\n(Sent|Date):/i.test(quoteText) &&
                         !/wrote:/i.test(quoteText)) {
+                        console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 3: Found forward pattern, returning forward');
                         return 'forward';
                     }
                     // If it has "wrote:" it's likely a reply
                     if (/wrote:/i.test(quoteText)) {
+                        console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 3: Found "wrote:" in quoteText, returning reply');
                         return 'reply';
                     }
                 }
@@ -1493,17 +1529,46 @@ const platformAdapters = {
             // PRIORITY 4: Fallback to subject line (least reliable)
             const subjectField = document.querySelector('input[aria-label="Subject"]');
             const subjectValue = subjectField?.value || '';
+            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 4: subjectValue:', subjectValue);
 
             // Check forward first (more specific)
             if (/fwd?:/i.test(subjectValue)) {
+                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 4: Found fwd: in subject, returning forward');
                 return 'forward';
             }
 
             // Then check reply
             if (subjectValue.toLowerCase().startsWith('re:')) {
+                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 4: Found Re: in subject, returning reply');
                 return 'reply';
             }
 
+            // PRIORITY 5: Check if there's an email message body above the compose box
+            // This is a robust fallback for inline replies where quoted content isn't in the compose container
+            const composeRect = composeBody.getBoundingClientRect();
+            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 5: composeRect top:', composeRect.top);
+            const messageBodySelectors = [
+                'div.a3s.aiL',      // Primary Gmail message body class
+                'div.ii.gt',        // Alternative Gmail message class
+                'div[data-message-id] div.a3s',  // Message with ID
+                'div.afn',          // Gmail collapsed/expanded message body (discovered in earlier debugging)
+            ];
+
+            for (const selector of messageBodySelectors) {
+                const messageDivs = document.querySelectorAll(selector);
+                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 5: selector', selector, 'found', messageDivs.length, 'divs');
+                for (const div of messageDivs) {
+                    const divRect = div.getBoundingClientRect();
+                    // Check if this div is above the compose box and has content
+                    if (divRect.bottom <= composeRect.top && divRect.height > 0) {
+                        // Found a message body above compose - this is a reply
+                        console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 5: Found message body above compose, returning reply');
+                        return 'reply';
+                    }
+                }
+            }
+
+            console.log('[ResponseAble DEBUG detectComposeAction] No reply/forward detected, returning new');
             return 'new';
         },
         // Check if reply or new message (legacy method, kept for backward compatibility)
@@ -2563,10 +2628,34 @@ const injectGenerateButton = () => {
             // Get context for API call using enhanced context extraction
             const richContext = getRichContext();
 
+            // Find the compose body associated with THIS button (not a global search)
+            // This fixes issues when multiple compose windows are open
+            // IMPROVED: Traverse up from sendButton (not generateButton) to find compose body
+            // This is more robust than relying on specific Gmail classnames
+            let scopedComposeBody = null;
+            if (platform === 'gmail') {
+                // Walk up the DOM from sendButton, checking each ancestor for a compose body
+                let ancestor = sendButton.parentElement;
+                let depth = 0;
+                const maxDepth = 15; // Don't go too far up
+                console.log('[ResponseAble DEBUG] Starting ancestor traversal from sendButton');
+                while (ancestor && depth < maxDepth && !scopedComposeBody) {
+                    scopedComposeBody = ancestor.querySelector('div[aria-label="Message Body"][role="textbox"]');
+                    if (scopedComposeBody) {
+                        console.log('[ResponseAble DEBUG] Found scopedComposeBody at depth:', depth, 'ancestor tag:', ancestor.tagName);
+                    }
+                    ancestor = ancestor.parentElement;
+                    depth++;
+                }
+                console.log('[ResponseAble DEBUG] Final scopedComposeBody found:', !!scopedComposeBody);
+            }
+
             // Use multi-factor detection to determine compose action type
+            // Pass the scoped compose body to ensure we detect the correct compose window
             let composeAction = 'new';
             if (adapter.detectComposeAction) {
-                composeAction = adapter.detectComposeAction();
+                composeAction = adapter.detectComposeAction(scopedComposeBody);
+                console.log('[ResponseAble DEBUG] composeAction result:', composeAction);
             } else {
                 // Fallback to old method if detectComposeAction not available
                 if (adapter.isReply && adapter.isReply()) {
@@ -2983,15 +3072,31 @@ const injectGenerateButton = () => {
                 return;
             }
 
-            // REPLY: Use existing classification flow
-            // Step 1: Classify email using AI
-            // Pass senderName so classification can use it for recipient_name (the person you're replying to)
-            updateButtonText(generateButton, 'Analyzing...');
+            // REPLY: Use classification flow with immediate progress overlay
+            // Show progress overlay immediately for instant feedback
+            const iconUrl = getChromeRuntime()?.runtime?.getURL ? getChromeRuntime().runtime.getURL('icon-128.png') : null;
+            showProgressOverlay(iconUrl);
+
+            // Update button to show we're working
+            updateButtonText(generateButton, 'Working...');
             generateButton.style.opacity = '0.7';
 
-            const classification = await classifyEmail(richContext, sourceMessageText, platform, threadHistoryText, senderName);
+            // Progress callback to update the overlay as each step completes
+            const onProgress = (progress) => {
+                if (progress.step === 'type') {
+                    updateProgressStep('step-type', 'completed', formatTypeResult(progress.data.type));
+                    updateProgressStep('step-goals', 'active');
+                } else if (progress.step === 'goals') {
+                    updateProgressStep('step-goals', 'completed', formatGoalsResult(progress.data.response_goals, progress.data.goal_titles));
+                    updateProgressStep('step-tone', 'active');
+                } else if (progress.step === 'tone') {
+                    updateProgressStep('step-tone', 'completed', formatToneResult(progress.data.tone_needed, progress.data.tone_sets, progress.data.currentGoal));
+                    updateProgressStep('step-generate', 'active');
+                }
+            };
 
-            updateButtonText(generateButton, 'Generating...');
+            // Classify email with progress updates
+            const classification = await classifyEmail(richContext, sourceMessageText, platform, threadHistoryText, senderName, onProgress);
 
             // Store context needed for regeneration
             // threadHistory excludes the email being replied to (for context only)
@@ -3023,11 +3128,17 @@ const injectGenerateButton = () => {
                     recipientCompany,
                     adapter,
                     async (draftsText, isPartial = false) => {
+                        // Remove progress overlay when streaming starts (first partial update)
+                        if (isPartial) {
+                            document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
+                        }
                         await showDraftsOverlay(draftsText, context, platform, null, classification, regenerateContext, null, isPartial);
                     },
                     regenerateContext  // Pass regenerateContext so function can access threadHistory
                 );
             } catch (err) {
+                // Remove progress overlay on error
+                document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
                 alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
             } finally {
                 // Restore button text (icon should still be there)
@@ -3652,15 +3763,17 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
                 draftsText = await callNewStreamingAPI(
                     `${VERCEL_PROXY_URL}/generate-drafts-reply`,
                     {
-                        emailBeingRepliedTo: emailBeingRepliedTo,
-                        previousThreadHistory: previousThreadHistory,
+                        emailContent: emailBeingRepliedTo,
+                        threadHistory: previousThreadHistory,
                         package: matchedPackage,
                         variantSet: variantSet,
                         currentGoal: currentGoal,
                         goalTone: goalTone,
                         recipientName: senderName || recipientName,
                         recipientCompany: recipientCompany,
-                        userIntent: userIntent,
+                        subject: richContext.subject && richContext.subject !== 'LinkedIn Message' ? richContext.subject : undefined,
+                        senderName: senderName,
+                        intent: classification.intent,
                         keyTopics: classification.key_topics,
                         writingStyle: classification.writing_style,
                         enableStyleMimicking: apiConfig.enableStyleMimicking,
@@ -3834,87 +3947,177 @@ const updateStreamingOverlay = (content) => {
     return true;
 };
 
-// Show drafts overlay with formatted content
+// Show progress overlay immediately when user clicks the button
+// This provides instant feedback while analysis steps complete
+const showProgressOverlay = (iconUrl) => {
+    // Remove any existing overlay
+    document.querySelector('.responseable-overlay')?.remove();
 
-// Get user-selected packages from storage (defaults to base package if none selected)
-const userPackages = await getUserPackages();
+    const overlay = document.createElement('div');
+    overlay.className = 'responseable-overlay responseable-progress-overlay';
+    overlay.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 80%;
+        max-width: 600px;
+        max-height: 90vh;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+        z-index: 2147483647;
+        padding: 24px;
+        font-family: Google Sans,Roboto,sans-serif;
+        display: flex;
+        flex-direction: column;
+    `;
 
-// Get matched type from userPackages based on classification.type
-const matchedPackage = userPackages.find(p => p.name === classification.type) || userPackages.find(p => p.base); // getUserPackages() always includes base package
+    overlay.innerHTML = `
+        <style>
+            @keyframes responseable-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } }
+            @keyframes responseable-dot-bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-4px); } }
+            @keyframes responseable-fade-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+            @keyframes responseable-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            .responseable-progress-step { display: flex; align-items: flex-start; margin-bottom: 16px; padding: 12px; border-radius: 8px; background: #f8f9fa; transition: all 0.3s ease; }
+            .responseable-progress-step.active { background: #e8f0fe; }
+            .responseable-progress-step.completed { background: #e6f4ea; }
+            .responseable-step-icon { width: 24px; height: 24px; margin-right: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+            .responseable-step-spinner { width: 18px; height: 18px; border: 2px solid #dadce0; border-top-color: #1a73e8; border-radius: 50%; animation: responseable-spin 0.8s linear infinite; }
+            .responseable-step-check { color: #34a853; font-size: 18px; }
+            .responseable-step-pending { color: #9aa0a6; font-size: 14px; }
+            .responseable-step-content { flex: 1; }
+            .responseable-step-title { font-weight: 500; color: #202124; margin-bottom: 4px; }
+            .responseable-step-result { font-size: 13px; color: #5f6368; animation: responseable-fade-in 0.3s ease; }
+            .responseable-step-result-value { color: #1a73e8; font-weight: 500; }
+            .responseable-goals-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+            .responseable-goal-chip { background: #e8f0fe; color: #1967d2; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+            .responseable-tones-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+            .responseable-tone-chip { background: #e6f4ea; color: #137333; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+        </style>
+        <div style="display: flex; align-items: center; margin-bottom: 20px;">
+            ${iconUrl ? `<img src="${iconUrl}" alt="xRepl.ai" style="width: 24px; height: 24px; margin-right: 8px; animation: responseable-pulse 2s ease-in-out infinite;">` : ''}
+            <h2 style="margin: 0; font-size: 18px; font-weight: 500;">
+                <span style="color: #5567b9;">xRepl.ai</span>
+                <span style="color: #9b9fa8;"> - Analyzing Email</span>
+            </h2>
+        </div>
+        <div class="responseable-progress-steps">
+            <div class="responseable-progress-step active" id="step-type">
+                <div class="responseable-step-icon">
+                    <div class="responseable-step-spinner"></div>
+                </div>
+                <div class="responseable-step-content">
+                    <div class="responseable-step-title">Determining email type...</div>
+                    <div class="responseable-step-result" id="result-type"></div>
+                </div>
+            </div>
+            <div class="responseable-progress-step" id="step-goals">
+                <div class="responseable-step-icon">
+                    <span class="responseable-step-pending">○</span>
+                </div>
+                <div class="responseable-step-content">
+                    <div class="responseable-step-title">Analyzing response strategies...</div>
+                    <div class="responseable-step-result" id="result-goals"></div>
+                </div>
+            </div>
+            <div class="responseable-progress-step" id="step-tone">
+                <div class="responseable-step-icon">
+                    <span class="responseable-step-pending">○</span>
+                </div>
+                <div class="responseable-step-content">
+                    <div class="responseable-step-title">Selecting optimal tones...</div>
+                    <div class="responseable-step-result" id="result-tone"></div>
+                </div>
+            </div>
+            <div class="responseable-progress-step" id="step-generate">
+                <div class="responseable-step-icon">
+                    <span class="responseable-step-pending">○</span>
+                </div>
+                <div class="responseable-step-content">
+                    <div class="responseable-step-title">Generating drafts...</div>
+                    <div class="responseable-step-result" id="result-generate"></div>
+                </div>
+            </div>
+        </div>
+        <div style="flex-shrink: 0; display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #dadce0; margin-top: auto;">
+            <button class="responseable-close-btn" style="padding: 10px 24px; background: #f1f3f4; color: #5f6368; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Cancel</button>
+        </div>
+    `;
 
-// Check if this is a new email
-const isNewEmail = classification.isNewEmail === true;
+    document.body.appendChild(overlay);
 
-// Extract userIntent early to avoid initialization issues
-const userIntent = matchedPackage && matchedPackage.userIntent ? matchedPackage.userIntent : '';
+    // Add close button handler
+    overlay.querySelector('.responseable-close-btn').addEventListener('click', () => {
+        overlay.remove();
+    });
 
-// Extract the actual email being replied to and thread history separately
-// sourceMessageText is the ACTUAL email being replied to (the specific one, not necessarily latest)
-// Use threadHistory from regenerateContext if available (it excludes the email being replied to)
-const emailBeingRepliedTo = sourceMessageText || '';
-const previousThreadHistory = (regenerateContext && regenerateContext.threadHistory)
-    ? regenerateContext.threadHistory
-    : (richContext.thread && richContext.thread !== 'New message'
-        ? richContext.thread
-        : '');
+    // Close on escape key
+    const escHandler = (e) => {
+        if (e.key === 'Escape') {
+            overlay.remove();
+            document.removeEventListener('keydown', escHandler);
+        }
+    };
+    document.addEventListener('keydown', escHandler);
 
-let draftsText;
-try {
-    // Use new streaming API endpoint for draft generation
-    if (isNewEmail) {
-        // New email draft - use generate-drafts-draft endpoint
-        draftsText = await callNewStreamingAPI(
-            `${VERCEL_PROXY_URL}/generate-drafts-draft`,
-            {
-                typedContent: classification.composeBodyText,
-                package: matchedPackage,
-                variantSet: variantSet,
-                currentGoal: currentGoal,
-                goalTone: goalTone,
-                recipientName: classification.recipient_name,
-                recipientCompany: classification.recipient_company,
-                userIntent: userIntent,
-                keyTopics: classification.key_topics,
-                writingStyle: classification.writing_style,
-                enableStyleMimicking: apiConfig.enableStyleMimicking,
-                platform: platform,
-                provider: apiConfig.provider,
-                model: apiConfig.model,
-                temperature: 0.8,
-                max_tokens: 2000
-            },
-            (fullContent, newChunk) => {
-                if (onComplete) {
-                    onComplete(fullContent, true); // true = isPartial
-                }
-            }
-        );
-    } else {
-        // Reply draft - use generate-drafts-reply endpoint
-        draftsText = await callNewStreamingAPI(
-            `${VERCEL_PROXY_URL}/generate-drafts-reply`,
-            {
-                emailContent: emailBeingRepliedTo,
-                threadHistory: previousThreadHistory,
-                package: matchedPackage,
-                variantSet: variantSet,
-                currentGoal: currentGoal,
-                goalTone: goalTone,
-                recipientName: classification.recipient_name,
-                recipientCompany: classification.recipient_company,
-                subject: richContext.subject && richContext.subject !== 'LinkedIn Message' ? richContext.subject : undefined,
-                senderName: senderName,
-                intent: classification.intent,
-                keyTopics: classification.key_topics,
-                writingStyle: classification.writing_style,
-                enableStyleMimicking: apiConfig.enableStyleMimicking,
-            }
-        );
+    return overlay;
+};
+
+// Update progress overlay step status
+const updateProgressStep = (stepId, status, result = null) => {
+    const overlay = document.querySelector('.responseable-overlay.responseable-progress-overlay');
+    if (!overlay) return;
+
+    const step = overlay.querySelector(`#${stepId}`);
+    if (!step) return;
+
+    const icon = step.querySelector('.responseable-step-icon');
+    const resultEl = step.querySelector('.responseable-step-result');
+
+    // Update step class
+    step.classList.remove('active', 'completed');
+
+    if (status === 'active') {
+        step.classList.add('active');
+        icon.innerHTML = '<div class="responseable-step-spinner"></div>';
+    } else if (status === 'completed') {
+        step.classList.add('completed');
+        icon.innerHTML = '<span class="responseable-step-check">✓</span>';
+        if (result && resultEl) {
+            resultEl.innerHTML = result;
+        }
+    } else if (status === 'pending') {
+        icon.innerHTML = '<span class="responseable-step-pending">○</span>';
     }
-} catch (error) {
-    console.error('Error generating drafts:', error);
-    throw error;
-}
+};
+
+// Format type result for display
+const formatTypeResult = (typeName) => {
+    const displayName = typeName.charAt(0).toUpperCase() + typeName.slice(1);
+    return `Email Type: <span class="responseable-step-result-value">${displayName}</span>`;
+};
+
+// Format goals result for display
+const formatGoalsResult = (goals, goalTitles) => {
+    if (!goals || goals.length === 0) return '';
+    const chips = goals.map(goal => {
+        const title = goalTitles && goalTitles[goal] ? goalTitles[goal] : goal;
+        return `<span class="responseable-goal-chip">${title}</span>`;
+    }).join('');
+    return `<div class="responseable-goals-preview">${chips}</div>`;
+};
+
+// Format tone result for display
+const formatToneResult = (toneNeeded, toneSets, currentGoal) => {
+    if (!toneNeeded) return '';
+    let tones = [toneNeeded];
+    if (toneSets && currentGoal && toneSets[currentGoal]) {
+        tones = toneSets[currentGoal].slice(0, 3);
+    }
+    const chips = tones.map(tone => `<span class="responseable-tone-chip">${tone}</span>`).join('');
+    return `<div class="responseable-tones-preview">${chips}</div>`;
+};
 
 // Show drafts overlay with formatted content
 const showDraftsOverlay = async (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null, newEmailParams = null, isPartial = false) => {
@@ -4669,6 +4872,21 @@ const createCommentButtonHandler = (editor) => {
                 } catch (e) { }
             }
 
+            // Show streaming overlay immediately for instant feedback
+            const iconUrl = runtime?.getURL ? runtime.getURL('icon-128.png') : null;
+            showStreamingOverlay('', iconUrl);
+
+            // Create a custom adapter for comment insertion
+            const commentAdapter = {
+                insertText: (text) => {
+                    editor.focus();
+                    editor.innerHTML = '';
+                    editor.innerText = text;
+                    const inputEvent = new Event('input', { bubbles: true });
+                    editor.dispatchEvent(inputEvent);
+                }
+            };
+
             // Use new streaming API endpoint for LinkedIn comment generation
             // Note: LinkedIn comments use the same draft generation endpoint but with comment-specific context
             const draftsText = await callNewStreamingAPI(
@@ -4696,22 +4914,17 @@ const createCommentButtonHandler = (editor) => {
                     temperature: 0.7,
                     max_tokens: 1000
                 },
-                null // No streaming updates for comments
+                (fullContent, newChunk) => {
+                    // Update streaming overlay with partial content
+                    updateStreamingOverlay(fullContent);
+                }
             );
             if (!draftsText) {
                 throw new Error('No response content received from API');
             }
 
-            // Create a custom adapter for comment insertion
-            const commentAdapter = {
-                insertText: (text) => {
-                    editor.focus();
-                    editor.innerHTML = '';
-                    editor.innerText = text;
-                    const inputEvent = new Event('input', { bubbles: true });
-                    editor.dispatchEvent(inputEvent);
-                }
-            };
+            // Remove streaming overlay before showing final drafts
+            document.querySelector('.responseable-overlay.responseable-streaming')?.remove();
 
             // Show drafts overlay with comment adapter
             (async () => {
@@ -4747,6 +4960,8 @@ const createCommentButtonHandler = (editor) => {
                 restoreButton();
             }, 30000);
         } catch (err) {
+            // Remove streaming overlay on error
+            document.querySelector('.responseable-overlay.responseable-streaming')?.remove();
             alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
             // Restore button
             commentButton.innerHTML = '';
