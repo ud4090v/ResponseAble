@@ -4007,7 +4007,7 @@ const showProgressOverlay = (iconUrl) => {
             .responseable-goals-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
             .responseable-goal-chip { background: #e8f0fe; color: #1967d2; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
             .responseable-tones-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-            .responseable-tone-chip { background: #fce8e6; color: #c5221f; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+            .responseable-tone-chip { background: #e6f4ea; color: #137333; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
         </style>
         <div style="display: flex; align-items: center; margin-bottom: 20px;">
             ${iconUrl ? `<img src="${iconUrl}" alt="xRepl.ai" style="width: 24px; height: 24px; margin-right: 8px; animation: responseable-pulse 2s ease-in-out infinite;">` : ''}
