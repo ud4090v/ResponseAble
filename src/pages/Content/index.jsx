@@ -1534,6 +1534,27 @@ const platformAdapters = {
                 return 'reply';
             }
 
+            // PRIORITY 5: Check if there's an email message body above the compose box
+            // This is a robust fallback for inline replies where quoted content isn't in the compose container
+            const composeRect = composeBody.getBoundingClientRect();
+            const messageBodySelectors = [
+                'div.a3s.aiL',      // Primary Gmail message body class
+                'div.ii.gt',        // Alternative Gmail message class
+                'div[data-message-id] div.a3s',  // Message with ID
+            ];
+
+            for (const selector of messageBodySelectors) {
+                const messageDivs = document.querySelectorAll(selector);
+                for (const div of messageDivs) {
+                    const divRect = div.getBoundingClientRect();
+                    // Check if this div is above the compose box and has content
+                    if (divRect.bottom <= composeRect.top && divRect.height > 0) {
+                        // Found a message body above compose - this is a reply
+                        return 'reply';
+                    }
+                }
+            }
+
             return 'new';
         },
         // Check if reply or new message (legacy method, kept for backward compatibility)
