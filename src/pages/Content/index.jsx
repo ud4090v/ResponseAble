@@ -1439,34 +1439,47 @@ const platformAdapters = {
         // Priority: Attribution line > Content patterns > DOM structure > Subject line
         // Optional scopedComposeBody parameter allows scoping detection to a specific compose box
         detectComposeAction: (scopedComposeBody = null) => {
+            console.log('[ResponseAble DEBUG detectComposeAction] Starting detection, scopedComposeBody provided:', !!scopedComposeBody);
             const composeBody = scopedComposeBody || document.querySelector('div[aria-label="Message Body"][role="textbox"]');
-            if (!composeBody) return 'new';
+            if (!composeBody) {
+                console.log('[ResponseAble DEBUG detectComposeAction] No composeBody found, returning new');
+                return 'new';
+            }
 
             const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') ||
                 composeBody.closest('form') ||
                 composeBody.parentElement?.parentElement?.parentElement;
+            console.log('[ResponseAble DEBUG detectComposeAction] composeContainer found:', !!composeContainer);
 
             // PRIORITY 1: Check attribution line (most reliable for replies)
             if (composeContainer) {
                 const gmailAttr = composeContainer.querySelector('.gmail_attr');
+                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: gmail_attr found:', !!gmailAttr);
                 if (gmailAttr) {
                     const attrText = gmailAttr.innerText || gmailAttr.textContent || '';
+                    console.log('[ResponseAble DEBUG detectComposeAction] gmail_attr text:', attrText.substring(0, 100));
                     // "wrote:" is the key indicator of a reply
                     if (/wrote:/i.test(attrText)) {
+                        console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: Found "wrote:" in gmail_attr, returning reply');
                         return 'reply';
                     }
                 }
 
                 // Check for attribution as sibling of quoted content
                 const quotedContent = composeContainer.querySelector('div.gmail_quote, blockquote.gmail_quote, blockquote');
+                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: quotedContent found:', !!quotedContent);
                 if (quotedContent) {
                     const attrLine = quotedContent.previousElementSibling;
+                    console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: attrLine sibling found:', !!attrLine);
                     if (attrLine) {
                         const attrText = attrLine.innerText || attrLine.textContent || '';
+                        console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: attrLine text:', attrText.substring(0, 100));
                         if (/wrote:/i.test(attrText)) {
+                            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: Found "wrote:" in attrLine, returning reply');
                             return 'reply';
                         }
                         if (/Forwarded message|Original Message/i.test(attrText)) {
+                            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: Found forward pattern in attrLine, returning forward');
                             return 'forward';
                         }
                     }
@@ -1475,6 +1488,7 @@ const platformAdapters = {
 
             // PRIORITY 2: Check content patterns in compose body
             const composeText = composeBody.innerText || composeBody.textContent || '';
+            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 2: composeText length:', composeText.length);
 
             // Check for Forward patterns (more specific, check first)
             const forwardPatterns = [
@@ -1505,17 +1519,22 @@ const platformAdapters = {
             }
 
             // PRIORITY 3: Check DOM structure
+            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 3: Checking DOM structure');
             if (composeContainer) {
                 const quotedContent = composeContainer.querySelector('div.gmail_quote, blockquote');
+                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 3: quotedContent found:', !!quotedContent);
                 if (quotedContent) {
                     const quoteText = quotedContent.innerText || quotedContent.textContent || '';
+                    console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 3: quoteText length:', quoteText.length);
                     // Check if it looks like a forward (has forward headers but no "wrote:")
                     if (/Forwarded message|Original Message|From:\s+.+\n(Sent|Date):/i.test(quoteText) &&
                         !/wrote:/i.test(quoteText)) {
+                        console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 3: Found forward pattern, returning forward');
                         return 'forward';
                     }
                     // If it has "wrote:" it's likely a reply
                     if (/wrote:/i.test(quoteText)) {
+                        console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 3: Found "wrote:" in quoteText, returning reply');
                         return 'reply';
                     }
                 }
@@ -1524,20 +1543,24 @@ const platformAdapters = {
             // PRIORITY 4: Fallback to subject line (least reliable)
             const subjectField = document.querySelector('input[aria-label="Subject"]');
             const subjectValue = subjectField?.value || '';
+            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 4: subjectValue:', subjectValue);
 
             // Check forward first (more specific)
             if (/fwd?:/i.test(subjectValue)) {
+                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 4: Found fwd: in subject, returning forward');
                 return 'forward';
             }
 
             // Then check reply
             if (subjectValue.toLowerCase().startsWith('re:')) {
+                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 4: Found Re: in subject, returning reply');
                 return 'reply';
             }
 
             // PRIORITY 5: Check if there's an email message body above the compose box
             // This is a robust fallback for inline replies where quoted content isn't in the compose container
             const composeRect = composeBody.getBoundingClientRect();
+            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 5: composeRect top:', composeRect.top);
             const messageBodySelectors = [
                 'div.a3s.aiL',      // Primary Gmail message body class
                 'div.ii.gt',        // Alternative Gmail message class
@@ -1546,16 +1569,19 @@ const platformAdapters = {
 
             for (const selector of messageBodySelectors) {
                 const messageDivs = document.querySelectorAll(selector);
+                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 5: selector', selector, 'found', messageDivs.length, 'divs');
                 for (const div of messageDivs) {
                     const divRect = div.getBoundingClientRect();
                     // Check if this div is above the compose box and has content
                     if (divRect.bottom <= composeRect.top && divRect.height > 0) {
                         // Found a message body above compose - this is a reply
+                        console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 5: Found message body above compose, returning reply');
                         return 'reply';
                     }
                 }
             }
 
+            console.log('[ResponseAble DEBUG detectComposeAction] No reply/forward detected, returning new');
             return 'new';
         },
         // Check if reply or new message (legacy method, kept for backward compatibility)
@@ -2621,17 +2647,22 @@ const injectGenerateButton = () => {
             if (platform === 'gmail') {
                 // Find the compose container that contains this button, then find its compose body
                 const buttonContainer = generateButton.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP, form');
+                console.log('[ResponseAble DEBUG] buttonContainer found:', !!buttonContainer);
                 if (buttonContainer) {
                     scopedComposeBody = buttonContainer.querySelector('div[aria-label="Message Body"][role="textbox"]');
+                    console.log('[ResponseAble DEBUG] scopedComposeBody from buttonContainer:', !!scopedComposeBody);
                 }
                 // Fallback: try to find compose body near the send button
                 if (!scopedComposeBody) {
                     const toolbar = sendButton.parentElement;
                     const formContainer = toolbar?.closest('form, .nH, .aO9, [role="dialog"]');
+                    console.log('[ResponseAble DEBUG] formContainer fallback:', !!formContainer);
                     if (formContainer) {
                         scopedComposeBody = formContainer.querySelector('div[aria-label="Message Body"][role="textbox"]');
+                        console.log('[ResponseAble DEBUG] scopedComposeBody from formContainer:', !!scopedComposeBody);
                     }
                 }
+                console.log('[ResponseAble DEBUG] Final scopedComposeBody:', !!scopedComposeBody);
             }
 
             // Use multi-factor detection to determine compose action type
@@ -2639,6 +2670,7 @@ const injectGenerateButton = () => {
             let composeAction = 'new';
             if (adapter.detectComposeAction) {
                 composeAction = adapter.detectComposeAction(scopedComposeBody);
+                console.log('[ResponseAble DEBUG] composeAction result:', composeAction);
             } else {
                 // Fallback to old method if detectComposeAction not available
                 if (adapter.isReply && adapter.isReply()) {
