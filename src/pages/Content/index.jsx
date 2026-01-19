@@ -1439,47 +1439,34 @@ const platformAdapters = {
         // Priority: Attribution line > Content patterns > DOM structure > Subject line
         // Optional scopedComposeBody parameter allows scoping detection to a specific compose box
         detectComposeAction: (scopedComposeBody = null) => {
-            console.log('[ResponseAble DEBUG detectComposeAction] Starting detection, scopedComposeBody provided:', !!scopedComposeBody);
             const composeBody = scopedComposeBody || document.querySelector('div[aria-label="Message Body"][role="textbox"]');
-            if (!composeBody) {
-                console.log('[ResponseAble DEBUG detectComposeAction] No composeBody found, returning new');
-                return 'new';
-            }
+            if (!composeBody) return 'new';
 
             const composeContainer = composeBody.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP') ||
                 composeBody.closest('form') ||
                 composeBody.parentElement?.parentElement?.parentElement;
-            console.log('[ResponseAble DEBUG detectComposeAction] composeContainer found:', !!composeContainer);
 
             // PRIORITY 1: Check attribution line (most reliable for replies)
             if (composeContainer) {
                 const gmailAttr = composeContainer.querySelector('.gmail_attr');
-                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: gmail_attr found:', !!gmailAttr);
                 if (gmailAttr) {
                     const attrText = gmailAttr.innerText || gmailAttr.textContent || '';
-                    console.log('[ResponseAble DEBUG detectComposeAction] gmail_attr text:', attrText.substring(0, 100));
                     // "wrote:" is the key indicator of a reply
                     if (/wrote:/i.test(attrText)) {
-                        console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: Found "wrote:" in gmail_attr, returning reply');
                         return 'reply';
                     }
                 }
 
                 // Check for attribution as sibling of quoted content
                 const quotedContent = composeContainer.querySelector('div.gmail_quote, blockquote.gmail_quote, blockquote');
-                console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: quotedContent found:', !!quotedContent);
                 if (quotedContent) {
                     const attrLine = quotedContent.previousElementSibling;
-                    console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: attrLine sibling found:', !!attrLine);
                     if (attrLine) {
                         const attrText = attrLine.innerText || attrLine.textContent || '';
-                        console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: attrLine text:', attrText.substring(0, 100));
                         if (/wrote:/i.test(attrText)) {
-                            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: Found "wrote:" in attrLine, returning reply');
                             return 'reply';
                         }
                         if (/Forwarded message|Original Message/i.test(attrText)) {
-                            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 1: Found forward pattern in attrLine, returning forward');
                             return 'forward';
                         }
                     }
@@ -1488,7 +1475,6 @@ const platformAdapters = {
 
             // PRIORITY 2: Check content patterns in compose body
             const composeText = composeBody.innerText || composeBody.textContent || '';
-            console.log('[ResponseAble DEBUG detectComposeAction] PRIORITY 2: composeText length:', composeText.length);
 
             // Check for Forward patterns (more specific, check first)
             const forwardPatterns = [
