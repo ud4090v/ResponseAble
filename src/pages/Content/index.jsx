@@ -1565,6 +1565,7 @@ const platformAdapters = {
                 'div.a3s.aiL',      // Primary Gmail message body class
                 'div.ii.gt',        // Alternative Gmail message class
                 'div[data-message-id] div.a3s',  // Message with ID
+                'div.afn',          // Gmail collapsed/expanded message body (discovered in earlier debugging)
             ];
 
             for (const selector of messageBodySelectors) {
@@ -2643,26 +2644,24 @@ const injectGenerateButton = () => {
 
             // Find the compose body associated with THIS button (not a global search)
             // This fixes issues when multiple compose windows are open
+            // IMPROVED: Traverse up from sendButton (not generateButton) to find compose body
+            // This is more robust than relying on specific Gmail classnames
             let scopedComposeBody = null;
             if (platform === 'gmail') {
-                // Find the compose container that contains this button, then find its compose body
-                const buttonContainer = generateButton.closest('.nH, .aO9, [role="dialog"], .M9, .iN, .aoP, form');
-                console.log('[ResponseAble DEBUG] buttonContainer found:', !!buttonContainer);
-                if (buttonContainer) {
-                    scopedComposeBody = buttonContainer.querySelector('div[aria-label="Message Body"][role="textbox"]');
-                    console.log('[ResponseAble DEBUG] scopedComposeBody from buttonContainer:', !!scopedComposeBody);
-                }
-                // Fallback: try to find compose body near the send button
-                if (!scopedComposeBody) {
-                    const toolbar = sendButton.parentElement;
-                    const formContainer = toolbar?.closest('form, .nH, .aO9, [role="dialog"]');
-                    console.log('[ResponseAble DEBUG] formContainer fallback:', !!formContainer);
-                    if (formContainer) {
-                        scopedComposeBody = formContainer.querySelector('div[aria-label="Message Body"][role="textbox"]');
-                        console.log('[ResponseAble DEBUG] scopedComposeBody from formContainer:', !!scopedComposeBody);
+                // Walk up the DOM from sendButton, checking each ancestor for a compose body
+                let ancestor = sendButton.parentElement;
+                let depth = 0;
+                const maxDepth = 15; // Don't go too far up
+                console.log('[ResponseAble DEBUG] Starting ancestor traversal from sendButton');
+                while (ancestor && depth < maxDepth && !scopedComposeBody) {
+                    scopedComposeBody = ancestor.querySelector('div[aria-label="Message Body"][role="textbox"]');
+                    if (scopedComposeBody) {
+                        console.log('[ResponseAble DEBUG] Found scopedComposeBody at depth:', depth, 'ancestor tag:', ancestor.tagName);
                     }
+                    ancestor = ancestor.parentElement;
+                    depth++;
                 }
-                console.log('[ResponseAble DEBUG] Final scopedComposeBody:', !!scopedComposeBody);
+                console.log('[ResponseAble DEBUG] Final scopedComposeBody found:', !!scopedComposeBody);
             }
 
             // Use multi-factor detection to determine compose action type
