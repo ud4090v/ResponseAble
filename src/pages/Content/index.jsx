@@ -3777,15 +3777,17 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
                 draftsText = await callNewStreamingAPI(
                     `${VERCEL_PROXY_URL}/generate-drafts-reply`,
                     {
-                        emailBeingRepliedTo: emailBeingRepliedTo,
-                        previousThreadHistory: previousThreadHistory,
+                        emailContent: emailBeingRepliedTo,
+                        threadHistory: previousThreadHistory,
                         package: matchedPackage,
                         variantSet: variantSet,
                         currentGoal: currentGoal,
                         goalTone: goalTone,
                         recipientName: senderName || recipientName,
                         recipientCompany: recipientCompany,
-                        userIntent: userIntent,
+                        subject: richContext.subject && richContext.subject !== 'LinkedIn Message' ? richContext.subject : undefined,
+                        senderName: senderName,
+                        intent: classification.intent,
                         keyTopics: classification.key_topics,
                         writingStyle: classification.writing_style,
                         enableStyleMimicking: apiConfig.enableStyleMimicking,
@@ -4130,88 +4132,6 @@ const formatToneResult = (toneNeeded, toneSets, currentGoal) => {
     const chips = tones.map(tone => `<span class="responseable-tone-chip">${tone}</span>`).join('');
     return `<div class="responseable-tones-preview">${chips}</div>`;
 };
-
-// Show drafts overlay with formatted content
-
-// Get user-selected packages from storage (defaults to base package if none selected)
-const userPackages = await getUserPackages();
-
-// Get matched type from userPackages based on classification.type
-const matchedPackage = userPackages.find(p => p.name === classification.type) || userPackages.find(p => p.base); // getUserPackages() always includes base package
-
-// Check if this is a new email
-const isNewEmail = classification.isNewEmail === true;
-
-// Extract userIntent early to avoid initialization issues
-const userIntent = matchedPackage && matchedPackage.userIntent ? matchedPackage.userIntent : '';
-
-// Extract the actual email being replied to and thread history separately
-// sourceMessageText is the ACTUAL email being replied to (the specific one, not necessarily latest)
-// Use threadHistory from regenerateContext if available (it excludes the email being replied to)
-const emailBeingRepliedTo = sourceMessageText || '';
-const previousThreadHistory = (regenerateContext && regenerateContext.threadHistory)
-    ? regenerateContext.threadHistory
-    : (richContext.thread && richContext.thread !== 'New message'
-        ? richContext.thread
-        : '');
-
-let draftsText;
-try {
-    // Use new streaming API endpoint for draft generation
-    if (isNewEmail) {
-        // New email draft - use generate-drafts-draft endpoint
-        draftsText = await callNewStreamingAPI(
-            `${VERCEL_PROXY_URL}/generate-drafts-draft`,
-            {
-                typedContent: classification.composeBodyText,
-                package: matchedPackage,
-                variantSet: variantSet,
-                currentGoal: currentGoal,
-                goalTone: goalTone,
-                recipientName: classification.recipient_name,
-                recipientCompany: classification.recipient_company,
-                userIntent: userIntent,
-                keyTopics: classification.key_topics,
-                writingStyle: classification.writing_style,
-                enableStyleMimicking: apiConfig.enableStyleMimicking,
-                platform: platform,
-                provider: apiConfig.provider,
-                model: apiConfig.model,
-                temperature: 0.8,
-                max_tokens: 2000
-            },
-            (fullContent, newChunk) => {
-                if (onComplete) {
-                    onComplete(fullContent, true); // true = isPartial
-                }
-            }
-        );
-    } else {
-        // Reply draft - use generate-drafts-reply endpoint
-        draftsText = await callNewStreamingAPI(
-            `${VERCEL_PROXY_URL}/generate-drafts-reply`,
-            {
-                emailContent: emailBeingRepliedTo,
-                threadHistory: previousThreadHistory,
-                package: matchedPackage,
-                variantSet: variantSet,
-                currentGoal: currentGoal,
-                goalTone: goalTone,
-                recipientName: classification.recipient_name,
-                recipientCompany: classification.recipient_company,
-                subject: richContext.subject && richContext.subject !== 'LinkedIn Message' ? richContext.subject : undefined,
-                senderName: senderName,
-                intent: classification.intent,
-                keyTopics: classification.key_topics,
-                writingStyle: classification.writing_style,
-                enableStyleMimicking: apiConfig.enableStyleMimicking,
-            }
-        );
-    }
-} catch (error) {
-    console.error('Error generating drafts:', error);
-    throw error;
-}
 
 // Show drafts overlay with formatted content
 const showDraftsOverlay = async (draftsText, context, platform, customAdapter = null, classification = null, regenerateContext = null, newEmailParams = null, isPartial = false) => {

@@ -22,6 +22,44 @@ config.plugins = (config.plugins || []).concat(
   })
 );
 
-webpack(config, function (err) {
-  if (err) throw err;
+webpack(config, function (err, stats) {
+  if (err) {
+    console.error(err);
+    throw err;
+  }
+  
+  if (stats.hasErrors()) {
+    console.error(stats.toString({
+      colors: true,
+      all: false,
+      errors: true,
+      maxModules: Infinity,
+      optimizationBailout: true,
+      errorDetails: true,
+      logging: 'error'
+    }));
+    process.exit(1);
+  }
+  
+  if (stats.hasWarnings()) {
+    console.warn(stats.toString({
+      colors: true,
+      all: false,
+      warnings: true,
+      maxModules: Infinity,
+      optimizationBailout: true,
+      logging: 'warn'
+    }));
+  }
+  
+  console.log(stats.toString({
+    colors: true,
+    chunks: false,
+    modules: false,
+    children: false,
+    entrypoints: false
+  }));
+  
+  console.log('\n✅ Build completed successfully!');
+  console.log(`📦 Output directory: ${path.resolve(__dirname, '../build')}`);
 });
