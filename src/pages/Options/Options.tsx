@@ -129,6 +129,14 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         setLicenseKey(result.licenseKey);
         // Validate license on load
         validateLicenseKey(result.licenseKey, false);
+      } else {
+        // No license key - ensure plan is set to free
+        if (loadedPlan !== 'free') {
+          setSubscriptionPlan('free');
+          chrome.storage.sync.set({ subscriptionPlan: 'free' }, () => {
+            handleSubscriptionPlanChange('free');
+          });
+        }
       }
     });
   }, []);
@@ -143,6 +151,14 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       setLicenseStatus({
         status: 'error',
         message: 'Please enter a license key',
+      });
+      // No license key - revert to free plan
+      setSubscriptionPlan('free');
+      chrome.storage.sync.set({ 
+        licenseKey: '',
+        subscriptionPlan: 'free' 
+      }, () => {
+        handleSubscriptionPlanChange('free');
       });
       return;
     }
@@ -190,10 +206,18 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           });
         }
       } else {
-        // License is invalid
+        // License is invalid - revert to free plan
         setLicenseStatus({
           status: 'error',
           message: data.error || 'Invalid license key',
+        });
+        setSubscriptionPlan('free');
+        chrome.storage.sync.set({ 
+          licenseKey: '',
+          subscriptionPlan: 'free' 
+        }, () => {
+          setLicenseKey('');
+          handleSubscriptionPlanChange('free');
         });
       }
     } catch (error) {
@@ -201,6 +225,14 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       setLicenseStatus({
         status: 'error',
         message: 'Failed to validate license. Please check your connection.',
+      });
+      // On error, revert to free plan
+      setSubscriptionPlan('free');
+      chrome.storage.sync.set({ 
+        licenseKey: '',
+        subscriptionPlan: 'free' 
+      }, () => {
+        handleSubscriptionPlanChange('free');
       });
     }
   };
@@ -764,7 +796,9 @@ const Options: React.FC<Props> = ({ title }: Props) => {
             <div className="SettingsSection">
               <h2>Subscription Plan</h2>
               <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
-                Select your subscription plan. This determines available features and limits.
+                {licenseStatus.status === 'success' && licenseStatus.plan
+                  ? 'Your subscription plan is determined by your active license key.'
+                  : 'Activate a license key above to unlock paid plans. Without a license, you are limited to the Free plan.'}
               </p>
 
               <div className="SettingGroup">
@@ -772,8 +806,24 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 <select
                   id="subscription-plan"
                   value={subscriptionPlan}
-                  onChange={(e) => handleSubscriptionPlanChange(e.target.value)}
-                  style={{ padding: '8px', fontSize: '14px', width: '200px' }}
+                  onChange={(e) => {
+                    // Only allow changing to free plan if no valid license
+                    if (licenseStatus.status !== 'success' || !licenseStatus.plan) {
+                      if (e.target.value !== 'free') {
+                        alert('Please activate a valid license key to use paid plans.');
+                        return;
+                      }
+                    }
+                    handleSubscriptionPlanChange(e.target.value);
+                  }}
+                  disabled={licenseStatus.status !== 'success' || !licenseStatus.plan}
+                  style={{ 
+                    padding: '8px', 
+                    fontSize: '14px', 
+                    width: '200px',
+                    opacity: (licenseStatus.status !== 'success' || !licenseStatus.plan) ? 0.6 : 1,
+                    cursor: (licenseStatus.status !== 'success' || !licenseStatus.plan) ? 'not-allowed' : 'pointer'
+                  }}
                 >
                   {SUBSCRIPTION_PLANS.map((plan) => (
                     <option key={plan.name} value={plan.name}>
@@ -781,11 +831,17 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                     </option>
                   ))}
                 </select>
-                {currentPlan && (
-                  <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
-                    Max Goals: {currentPlan.maxGoals} | Max Variants: {currentPlan.maxVariants} | Max Tones: {currentPlan.maxTones} |
-                    Generations: {currentPlan.maxGenerationsPerMonth === 999999999999 ? 'Unlimited' : currentPlan.maxGenerationsPerMonth}/month
+                {licenseStatus.status !== 'success' || !licenseStatus.plan ? (
+                  <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#ea4335' }}>
+                    ⚠️ License key required for paid plans. Currently using Free plan limits.
                   </p>
+                ) : (
+                  currentPlan && (
+                    <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                      Max Goals: {currentPlan.maxGoals} | Max Variants: {currentPlan.maxVariants} | Max Tones: {currentPlan.maxTones} |
+                      Generations: {currentPlan.maxGenerationsPerMonth === 999999999999 ? 'Unlimited' : currentPlan.maxGenerationsPerMonth}/month
+                    </p>
+                  )
                 )}
               </div>
 
