@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './Options.css';
 import ALL_PACKAGES_DATA from '../../config/packages.json';
 import SUBSCRIPTION_PLANS_DATA from '../../config/subscriptionPlans.json';
+import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
 
 interface Props {
   title: string;
@@ -153,8 +154,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
 
     try {
       // Call validation API
-      const apiBaseUrl = process.env.VERCEL_PROXY_URL || 'https://xrepl.app/api';
-      const response = await fetch(`${apiBaseUrl}/validate`, {
+      const response = await fetch(`${VERCEL_PROXY_URL}/validate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -3771,9 +3771,79 @@ Email body: ${composeBodyText || '(not provided)'}`
     }
 };
 
+/**
+ * Validate license key and check/increment usage if needed
+ * Returns validation result with plan info
+ */
+const validateLicenseBeforeGeneration = async () => {
+    try {
+        // Get license key from storage
+        return new Promise((resolve) => {
+            chrome.storage.sync.get(['licenseKey'], async (result) => {
+                const licenseKey = result.licenseKey;
+
+                // If no license key, allow free tier usage
+                if (!licenseKey) {
+                    resolve({ valid: true, plan: 'free' });
+                    return;
+                }
+
+                try {
+                    // Validate license with increment flag for Basic plan
+                    const response = await fetch(`${VERCEL_PROXY_URL}/validate`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            key: licenseKey,
+                            increment: true // Increment usage for Basic plan
+                        }),
+                    });
+
+                    const data = await response.json();
+
+                    if (data.valid) {
+                        resolve({
+                            valid: true,
+                            plan: data.plan,
+                            active_packages: data.active_packages || [],
+                            generations_remaining: data.generations_remaining,
+                        });
+                    } else {
+                        // License invalid - show error but don't block (graceful degradation)
+                        console.warn('License validation failed:', data.error);
+                        resolve({
+                            valid: false,
+                            error: data.error,
+                            plan: data.plan || 'free'
+                        });
+                    }
+                } catch (error) {
+                    console.error('License validation error:', error);
+                    // On error, allow free tier (graceful degradation)
+                    resolve({ valid: true, plan: 'free' });
+                }
+            });
+        });
+    } catch (error) {
+        console.error('License validation error:', error);
+        // On error, allow free tier
+        return { valid: true, plan: 'free' };
+    }
+};
+
 const generateDraftsWithTone = async (richContext, sourceMessageText, platform, classification, selectedTone, senderName, recipientName, recipientCompany, adapter, onComplete, regenerateContext = null) => {
     try {
         await loadApiConfig();
+
+        // Validate license before generation (for Basic plan usage tracking)
+        const licenseValidation = await validateLicenseBeforeGeneration();
+
+        // If license invalid and not free tier, show warning but continue
+        if (!licenseValidation.valid && licenseValidation.plan !== 'free') {
+            console.warn('License validation failed, using free tier limits');
+        }
 
         // Get the primary goal and its variants/tone
         // Check if a specific goal was passed (for tab switching)

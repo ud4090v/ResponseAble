@@ -137,3 +137,13 @@
 .TabContent {
   min-height: 400px;
 }
+
+/* Spinner animation for loading states */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
