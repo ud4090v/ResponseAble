@@ -813,6 +813,15 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
                     key_topics: []
                 };
             }
+
+            // Limit variant_sets to configured numVariants for specialized packages
+            if (intentGoalsResult.variant_sets && intentGoalsResult.response_goals) {
+                intentGoalsResult.response_goals.forEach(goal => {
+                    if (intentGoalsResult.variant_sets[goal] && Array.isArray(intentGoalsResult.variant_sets[goal])) {
+                        intentGoalsResult.variant_sets[goal] = intentGoalsResult.variant_sets[goal].slice(0, numVariants);
+                    }
+                });
+            }
         }
 
         // Report goals determination progress
@@ -2775,7 +2784,11 @@ const injectGenerateButton = () => {
             // Forward is treated as New Email with forwarded message as context
             if (isForward || !isReply) {
                 // NEW EMAIL: Extract compose window content and generate drafts
-                updateButtonText(generateButton, 'Analyzing...');
+                // Show progress overlay immediately for instant feedback
+                const iconUrl = getChromeRuntime()?.runtime?.getURL ? getChromeRuntime().runtime.getURL('icon-128.png') : null;
+                showProgressOverlay(iconUrl);
+
+                updateButtonText(generateButton, 'Working...');
                 generateButton.style.opacity = '0.7';
                 generateButton.disabled = true; // Disable button during generation
 
@@ -2871,6 +2884,20 @@ const injectGenerateButton = () => {
                     }
                 }
 
+                // Progress callback to update the overlay as each step completes
+                const onProgress = (progress) => {
+                    if (progress.step === 'type') {
+                        updateProgressStep('step-type', 'completed', formatTypeResult(progress.data.type));
+                        updateProgressStep('step-goals', 'active');
+                    } else if (progress.step === 'goals') {
+                        updateProgressStep('step-goals', 'completed', formatGoalsResult(progress.data.response_goals, progress.data.goal_titles));
+                        updateProgressStep('step-tone', 'active');
+                    } else if (progress.step === 'tone') {
+                        updateProgressStep('step-tone', 'completed', formatToneResult(progress.data.tone_needed, progress.data.tone_sets, progress.data.currentGoal));
+                        updateProgressStep('step-generate', 'active');
+                    }
+                };
+
                 // Determine type based on typed content (if available)
                 let selectedRole = defaultRole;
                 let shouldUseGenericSingleDraft = false;
@@ -2937,10 +2964,42 @@ const injectGenerateButton = () => {
                                 shouldUseGenericSingleDraft = true;
                             }
                         }
+
+                        // Report type determination progress
+                        if (onProgress) {
+                            onProgress({
+                                step: 'type',
+                                data: {
+                                    type: selectedRole,
+                                    confidence: confidence
+                                }
+                            });
+                        }
                     } catch (typeError) {
                         console.error('Error determining type from content:', typeError);
                         // Fallback to default role
                         selectedRole = defaultRole;
+                        // Still report type progress with fallback
+                        if (onProgress) {
+                            onProgress({
+                                step: 'type',
+                                data: {
+                                    type: selectedRole,
+                                    confidence: 0
+                                }
+                            });
+                        }
+                    }
+                } else {
+                    // No typed content - use default role and report immediately
+                    if (onProgress) {
+                        onProgress({
+                            step: 'type',
+                            data: {
+                                type: selectedRole,
+                                confidence: 1.0
+                            }
+                        });
                     }
                 }
 
@@ -2963,6 +3022,11 @@ const injectGenerateButton = () => {
                             userAccountName,
                             userAccountEmail,
                             async (draftsText, classificationOrPartial) => {
+                                // Remove progress overlay when streaming starts (first partial update)
+                                if (typeof classificationOrPartial === 'boolean' && classificationOrPartial) {
+                                    document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
+                                }
+
                                 // Create regenerateContext for new emails so tone selector works
                                 const newEmailRegenerateContext = {
                                     richContext: context,
@@ -3019,6 +3083,11 @@ const injectGenerateButton = () => {
                             composeBodyText,
                             composeRecipient,
                             async (draftsText, classificationOrPartial) => {
+                                // Remove progress overlay when streaming starts (first partial update)
+                                if (typeof classificationOrPartial === 'boolean' && classificationOrPartial) {
+                                    document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
+                                }
+
                                 // Create regenerateContext for new emails so tone selector works
                                 const newEmailRegenerateContext = {
                                     richContext: context,
@@ -3048,7 +3117,6 @@ const injectGenerateButton = () => {
                                 };
 
                                 // Handle both streaming (isPartial=true) and final (classification object) cases
-                                // generateDraftsForNewEmail passes either isPartial (boolean) or classification (object)
                                 if (typeof classificationOrPartial === 'boolean') {
                                     // This is a streaming update (isPartial flag) - pass isPartial directly like Reply flow
                                     await showDraftsOverlay(draftsText, context, platform, adapter, null, newEmailRegenerateContext, newEmailParams, classificationOrPartial);
@@ -3059,10 +3127,13 @@ const injectGenerateButton = () => {
                                 const classification = classificationOrPartial;
 
                                 await showDraftsOverlay(draftsText, context, platform, adapter, classification, newEmailRegenerateContext, newEmailParams);
-                            }
+                            },
+                            onProgress
                         );
                     }
                 } catch (err) {
+                    // Remove progress overlay on error
+                    document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
                     alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
                 } finally {
                     updateButtonText(generateButton, currentButtonText);
@@ -3141,9 +3212,12 @@ const injectGenerateButton = () => {
                 document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
                 alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
             } finally {
+                // Remove progress overlay if still present
+                document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
                 // Restore button text (icon should still be there)
                 updateButtonText(generateButton, currentButtonText);
                 generateButton.style.opacity = '1';
+                generateButton.disabled = false; // Re-enable button
                 // Restore platform-specific styles
                 if (platform === 'linkedin') {
                     generateButton.style.borderRadius = '16px';
@@ -3394,7 +3468,7 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
 };
 
 // Generate drafts for new emails (mimics reply generation flow)
-const generateDraftsForNewEmail = async (richContext, platform, selectedRole, recipientName, recipientCompany, adapter, userAccountName = '', userAccountEmail = '', composeSubject = '', composeBodyText = '', composeRecipient = '', onComplete) => {
+const generateDraftsForNewEmail = async (richContext, platform, selectedRole, recipientName, recipientCompany, adapter, userAccountName = '', userAccountEmail = '', composeSubject = '', composeBodyText = '', composeRecipient = '', onComplete, onProgress = null) => {
     try {
         await loadApiConfig();
         const numVariants = apiConfig.numVariants || 4;
@@ -3440,7 +3514,7 @@ Email body: ${composeBodyText || '(not provided)'}`
                 },
                 body: JSON.stringify({
                     typedContent: composeBodyText,
-                    package: matchedPackage,
+                    package: selectedPackage,
                     recipientName: recipientName,
                     recipientCompany: recipientCompany,
                     platform: platform,
@@ -3476,6 +3550,18 @@ Email body: ${composeBodyText || '(not provided)'}`
                 recipient_company: recipientCompany || null,
                 key_topics: []
             };
+        }
+
+        // Report goals determination progress
+        if (onProgress) {
+            onProgress({
+                step: 'goals',
+                data: {
+                    intent: userIntent,
+                    response_goals: intentGoalsResult.response_goals,
+                    goal_titles: intentGoalsResult.goal_titles
+                }
+            });
         }
 
         // ============================================================================
@@ -3609,6 +3695,18 @@ Email body: ${composeBodyText || '(not provided)'}`
             });
         }
 
+        // Report tone determination progress
+        if (onProgress) {
+            onProgress({
+                step: 'tone',
+                data: {
+                    tone_needed: toneResult.tone_needed || 'Professional',
+                    tone_sets: toneResult.tone_sets || {},
+                    currentGoal: intentGoalsResult.response_goals?.[0] || null
+                }
+            });
+        }
+
         // ============================================================================
         // STEP 3: BUILD CLASSIFICATION OBJECT (similar to reply flow)
         // ============================================================================
@@ -3645,6 +3743,11 @@ Email body: ${composeBodyText || '(not provided)'}`
             recipientCompany || null,
             adapter,
             async (draftsText, isPartial = false) => {
+                // Remove progress overlay when streaming starts (first partial update)
+                if (isPartial) {
+                    document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
+                }
+
                 // Pass classification along with draftsText to onComplete
                 // Note: generateDraftsWithTone calls onComplete(draftsText, isPartial)
                 // so we need to handle isPartial and pass classification separately
@@ -3694,9 +3797,14 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
         ];
 
         // Use provided variant set if available (from tab switching), otherwise get from classification
-        const variantSet = classification._currentVariantSet || (classification.variant_sets && classification.variant_sets[currentGoal]
+        let variantSet = classification._currentVariantSet || (classification.variant_sets && classification.variant_sets[currentGoal]
             ? classification.variant_sets[currentGoal]
             : defaultVariants.slice(0, expectedNumVariants));
+
+        // Ensure variantSet is limited to expectedNumVariants (safety check)
+        if (Array.isArray(variantSet) && variantSet.length > expectedNumVariants) {
+            variantSet = variantSet.slice(0, expectedNumVariants);
+        }
 
         const toneSet = classification.tone_sets && classification.tone_sets[currentGoal]
             ? classification.tone_sets[currentGoal]
@@ -3993,7 +4101,7 @@ const showProgressOverlay = (iconUrl) => {
             .responseable-goals-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
             .responseable-goal-chip { background: #e8f0fe; color: #1967d2; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
             .responseable-tones-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-            .responseable-tone-chip { background: #e6f4ea; color: #137333; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+            .responseable-tone-chip { background: #e8f0fe; color: #1967d2; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
         </style>
         <div style="display: flex; align-items: center; margin-bottom: 20px;">
             ${iconUrl ? `<img src="${iconUrl}" alt="xRepl.ai" style="width: 24px; height: 24px; margin-right: 8px; animation: responseable-pulse 2s ease-in-out infinite;">` : ''}
@@ -4008,7 +4116,7 @@ const showProgressOverlay = (iconUrl) => {
                     <div class="responseable-step-spinner"></div>
                 </div>
                 <div class="responseable-step-content">
-                    <div class="responseable-step-title">Determining email type...</div>
+                    <div class="responseable-step-title">Determining Semantic Context...</div>
                     <div class="responseable-step-result" id="result-type"></div>
                 </div>
             </div>
@@ -4017,7 +4125,7 @@ const showProgressOverlay = (iconUrl) => {
                     <span class="responseable-step-pending">○</span>
                 </div>
                 <div class="responseable-step-content">
-                    <div class="responseable-step-title">Analyzing response strategies...</div>
+                    <div class="responseable-step-title">Analyzing strategies...</div>
                     <div class="responseable-step-result" id="result-goals"></div>
                 </div>
             </div>
@@ -4095,7 +4203,7 @@ const updateProgressStep = (stepId, status, result = null) => {
 // Format type result for display
 const formatTypeResult = (typeName) => {
     const displayName = typeName.charAt(0).toUpperCase() + typeName.slice(1);
-    return `Email Type: <span class="responseable-step-result-value">${displayName}</span>`;
+    return `Semantic context: <span class="responseable-step-result-value">${displayName}</span>`;
 };
 
 // Format goals result for display
@@ -4376,7 +4484,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
 
     overlay.innerHTML = `
     <div style="flex-shrink: 0;">
-      <h2 style="margin-top:0; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> <span style="color:#5567b9;">xRepl.ai</span><span style="color:#5f6368;"> - Smart Replies, Instantly</span></h2>
+      <h2 style="margin-top:0; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> <span style="color:#5567b9;">xRepl.ai</span><span style="color:#5f6368;"> - ${isNewEmail ? 'Smart Drafts, Instantly' : 'Smart Replies, Instantly'}</span></h2>
       ${isNewEmail ? '' : (selectedPackageNames ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : '')}
       ${newEmailDropdownHtml}
       ${!isNewEmail && matchedTypeInfo ? `<p style="color:#5f6368; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}

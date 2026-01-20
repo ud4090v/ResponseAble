@@ -77,6 +77,13 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   const [subscriptionPlan, setSubscriptionPlan] = useState<string>('free');
   const [saved, setSaved] = useState(false);
   const [iconUrl, setIconUrl] = useState<string>('');
+  const [licenseKey, setLicenseKey] = useState<string>('');
+  const [licenseStatus, setLicenseStatus] = useState<{
+    status: 'idle' | 'loading' | 'success' | 'error';
+    message: string;
+    plan?: string;
+    expiresAt?: string;
+  }>({ status: 'idle', message: '' });
 
   useEffect(() => {
     // Get icon URL
@@ -88,7 +95,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     }
 
     // Load saved settings
-    chrome.storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'numGoals', 'numTones', 'classificationConfidenceThreshold', 'enableStyleMimicking', 'selectedPackages', 'defaultRole', 'subscriptionPlan'], (result) => {
+    chrome.storage.sync.get(['apiProvider', 'apiModel', 'numVariants', 'numGoals', 'numTones', 'classificationConfidenceThreshold', 'enableStyleMimicking', 'selectedPackages', 'defaultRole', 'subscriptionPlan', 'licenseKey'], (result) => {
       // Load subscription plan, default to 'free' if not set
       const loadedPlan = result.subscriptionPlan && typeof result.subscriptionPlan === 'string' ? result.subscriptionPlan : 'free';
       setSubscriptionPlan(loadedPlan);
@@ -115,8 +122,95 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         ? result.selectedPackages
         : ['generic'];
       setDefaultRole(loadedPackages.includes(loadedDefaultRole) ? loadedDefaultRole : 'generic');
+      
+      // Load license key if exists
+      if (result.licenseKey) {
+        setLicenseKey(result.licenseKey);
+        // Validate license on load
+        validateLicenseKey(result.licenseKey, false);
+      }
     });
   }, []);
+
+  /**
+   * Validate license key with the API
+   * @param key - License key to validate
+   * @param saveOnSuccess - Whether to save key to storage if valid
+   */
+  const validateLicenseKey = async (key: string, saveOnSuccess: boolean = true) => {
+    if (!key || key.trim().length === 0) {
+      setLicenseStatus({
+        status: 'error',
+        message: 'Please enter a license key',
+      });
+      return;
+    }
+
+    setLicenseStatus({
+      status: 'loading',
+      message: 'Validating license key...',
+    });
+
+    try {
+      // Call validation API
+      const apiBaseUrl = process.env.VERCEL_PROXY_URL || 'https://xrepl.app/api';
+      const response = await fetch(`${apiBaseUrl}/validate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ key: key.trim() }),
+      });
+
+      const data = await response.json();
+
+      if (data.valid) {
+        // License is valid
+        const expiresDate = data.expires_at ? new Date(data.expires_at).toLocaleDateString() : 'N/A';
+        const planDisplay = data.plan ? data.plan.charAt(0).toUpperCase() + data.plan.slice(1) : 'Unknown';
+        
+        setLicenseStatus({
+          status: 'success',
+          message: `Active ${planDisplay} – expires ${expiresDate}`,
+          plan: data.plan,
+          expiresAt: data.expires_at,
+        });
+
+        // Save license key and update subscription plan
+        if (saveOnSuccess) {
+          chrome.storage.sync.set({
+            licenseKey: key.trim(),
+            subscriptionPlan: data.plan || 'free',
+          }, () => {
+            // Update local state
+            setLicenseKey(key.trim());
+            setSubscriptionPlan(data.plan || 'free');
+            // Trigger plan change handler to update settings
+            handleSubscriptionPlanChange(data.plan || 'free');
+          });
+        }
+      } else {
+        // License is invalid
+        setLicenseStatus({
+          status: 'error',
+          message: data.error || 'Invalid license key',
+        });
+      }
+    } catch (error) {
+      console.error('License validation error:', error);
+      setLicenseStatus({
+        status: 'error',
+        message: 'Failed to validate license. Please check your connection.',
+      });
+    }
+  };
+
+  /**
+   * Handle license key activation
+   */
+  const handleActivateLicense = () => {
+    validateLicenseKey(licenseKey, true);
+  };
 
   // Auto-reset default role to generic if it's not in selected packages
   useEffect(() => {
@@ -328,6 +422,116 @@ const Options: React.FC<Props> = ({ title }: Props) => {
             <span> - Settings</span>
           </span>
         </h1>
+
+        {/* License Key Section - Always visible at top */}
+        <div className="SettingsSection" style={{ marginBottom: '30px', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '20px', backgroundColor: '#f8f9fa' }}>
+          <h2 style={{ marginTop: 0 }}>License Activation</h2>
+          <p className="HelpText" style={{ marginBottom: '16px', fontStyle: 'normal' }}>
+            Enter your license key to activate your subscription. Your license key was sent to your email after purchase.
+          </p>
+          
+          <div className="SettingGroup">
+            <label htmlFor="license-key" style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>
+              License Key:
+            </label>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+              <input
+                id="license-key"
+                type="text"
+                value={licenseKey}
+                onChange={(e) => setLicenseKey(e.target.value)}
+                placeholder="XRPL-XXXX-XXXX-XXXX"
+                style={{
+                  flex: 1,
+                  padding: '10px 12px',
+                  fontSize: '14px',
+                  border: '1px solid #dadce0',
+                  borderRadius: '4px',
+                  fontFamily: 'monospace',
+                }}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    handleActivateLicense();
+                  }
+                }}
+              />
+              <button
+                onClick={handleActivateLicense}
+                disabled={licenseStatus.status === 'loading' || !licenseKey.trim()}
+                style={{
+                  padding: '10px 24px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  backgroundColor: licenseStatus.status === 'loading' || !licenseKey.trim() ? '#dadce0' : '#5567b9',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: licenseStatus.status === 'loading' || !licenseKey.trim() ? 'not-allowed' : 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {licenseStatus.status === 'loading' ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ display: 'inline-block', width: '14px', height: '14px', border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}></span>
+                    Validating...
+                  </span>
+                ) : (
+                  'Activate'
+                )}
+              </button>
+            </div>
+            
+            {/* Status Display */}
+            {licenseStatus.status !== 'idle' && (
+              <div
+                style={{
+                  marginTop: '12px',
+                  padding: '12px',
+                  borderRadius: '4px',
+                  backgroundColor:
+                    licenseStatus.status === 'success'
+                      ? '#e6f4ea'
+                      : licenseStatus.status === 'error'
+                      ? '#fce8e6'
+                      : '#e8f0fe',
+                  color:
+                    licenseStatus.status === 'success'
+                      ? '#137333'
+                      : licenseStatus.status === 'error'
+                      ? '#c5221f'
+                      : '#1967d2',
+                  fontSize: '14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                {licenseStatus.status === 'success' && (
+                  <span style={{ fontSize: '18px' }}>✓</span>
+                )}
+                {licenseStatus.status === 'error' && (
+                  <span style={{ fontSize: '18px' }}>✗</span>
+                )}
+                <span>{licenseStatus.message}</span>
+                {licenseStatus.status === 'error' && (
+                  <a
+                    href="https://xrepl.ai/pricing"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      marginLeft: 'auto',
+                      color: '#1967d2',
+                      textDecoration: 'underline',
+                      fontSize: '13px',
+                    }}
+                  >
+                    View Pricing
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Tabs */}
         <div className="TabsContainer">
