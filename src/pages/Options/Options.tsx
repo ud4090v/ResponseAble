@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import './Options.css';
-import ALL_PACKAGES_DATA from '../../config/packages.json';
-import SUBSCRIPTION_PLANS_DATA from '../../config/subscriptionPlans.json';
 import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
 
 interface Props {
@@ -39,15 +37,12 @@ interface SubscriptionPlan {
   availableModels: {
     [key: string]: string[];
   };
-  contentPackagesAllowed: boolean;
   allContent: boolean;
   styleMimickingEnabled: boolean;
   classificationConfidenceEnabled: boolean;
 }
 
-// Master list of all available packages - imported from shared config
-const ALL_PACKAGES: Package[] = ALL_PACKAGES_DATA as Package[];
-const SUBSCRIPTION_PLANS: SubscriptionPlan[] = SUBSCRIPTION_PLANS_DATA as SubscriptionPlan[];
+// Plans will be loaded from API
 
 const API_PROVIDERS = {
   openai: {
@@ -76,6 +71,8 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   const [selectedPackages, setSelectedPackages] = useState<string[]>(['generic']);
   const [defaultRole, setDefaultRole] = useState<string>('generic');
   const [subscriptionPlan, setSubscriptionPlan] = useState<string>('free');
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
+  const [plansLoading, setPlansLoading] = useState<boolean>(true);
   const [saved, setSaved] = useState(false);
   const [iconUrl, setIconUrl] = useState<string>('');
   const [licenseKey, setLicenseKey] = useState<string>('');
@@ -101,6 +98,9 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     } catch (error) {
       console.error('Failed to get icon URL:', error);
     }
+
+    // Load plans from API
+    fetchPlans();
 
     // Handle purchase success/cancel from URL params
     const urlParams = new URLSearchParams(window.location.search);
@@ -157,17 +157,47 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         setLicenseKey(result.licenseKey);
         // Validate license on load (this will also fetch packages)
         validateLicenseKey(result.licenseKey, false);
-      } else {
-        // No license key - ensure plan is set to free
-        if (loadedPlan !== 'free') {
-          setSubscriptionPlan('free');
-          chrome.storage.sync.set({ subscriptionPlan: 'free' }, () => {
-            handleSubscriptionPlanChange('free');
-          });
-        }
       }
+      // Note: No license key always means Free plan - no need for defensive check
     });
   }, []);
+
+  /**
+   * Fetch subscription plans from API
+   */
+  const fetchPlans = async () => {
+    setPlansLoading(true);
+    try {
+      const response = await fetch(`${VERCEL_PROXY_URL}/plans/list`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json();
+
+      if (data.success && data.plans) {
+        setSubscriptionPlans(data.plans);
+        
+        // Cache plans in storage for Content Script
+        chrome.storage.sync.set({
+          cachedPlans: data.plans,
+          cachedPlansTimestamp: Date.now(),
+        });
+      } else {
+        console.error('Failed to fetch plans:', data);
+        // Fallback to empty array - will use defaults
+        setSubscriptionPlans([]);
+      }
+    } catch (error) {
+      console.error('Error fetching plans:', error);
+      // Fallback to empty array - will use defaults
+      setSubscriptionPlans([]);
+    } finally {
+      setPlansLoading(false);
+    }
+  };
 
   /**
    * Fetch packages for the current license
@@ -197,6 +227,31 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         if (data.packages.all_active && data.packages.all_active.length > 0) {
           setSelectedPackages(data.packages.all_active);
         }
+        
+        // Cache full package definitions for Content Script
+        // Fetch full definitions and cache them
+        try {
+          const definitionsResponse = await fetch(`${VERCEL_PROXY_URL}/packages/definitions`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
+          
+          if (definitionsResponse.ok) {
+            const definitionsData = await definitionsResponse.json();
+            if (definitionsData.success && definitionsData.packages) {
+              // Cache in storage for Content Script to use
+              chrome.storage.sync.set({
+                cachedPackages: definitionsData.packages,
+                cachedPackagesTimestamp: Date.now(),
+              });
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to cache package definitions:', error);
+          // Non-critical - Content Script will fetch directly if needed
+        }
       } else {
         setPackagesData(null);
       }
@@ -220,13 +275,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         message: 'Please enter a license key. Get access at https://xrepl.ai/pricing',
       });
       // No license key - revert to free plan
-      setSubscriptionPlan('free');
-      chrome.storage.sync.set({ 
-        licenseKey: '',
-        subscriptionPlan: 'free' 
-      }, () => {
-        handleSubscriptionPlanChange('free');
-      });
+      resetToFreePlan();
       return;
     }
 
@@ -261,6 +310,10 @@ const Options: React.FC<Props> = ({ title }: Props) => {
 
         // Save license key and update subscription plan
         if (saveOnSuccess) {
+          // Fetch packages first (they determine what's available)
+          await fetchPackages(key.trim());
+          
+          // Then update plan and adjust settings based on plan limits
           chrome.storage.sync.set({
             licenseKey: key.trim(),
             subscriptionPlan: data.plan || 'free',
@@ -268,27 +321,20 @@ const Options: React.FC<Props> = ({ title }: Props) => {
             // Update local state
             setLicenseKey(key.trim());
             setSubscriptionPlan(data.plan || 'free');
-            // Trigger plan change handler to update settings
+            // Trigger plan change handler to update settings (provider/model/variants/goals/tones)
             handleSubscriptionPlanChange(data.plan || 'free');
           });
+        } else {
+          // If not saving, still fetch packages for display
+          await fetchPackages(key.trim());
         }
-
-        // Fetch packages for this license
-        await fetchPackages(key.trim());
       } else {
         // License is invalid - revert to free plan
         setLicenseStatus({
           status: 'error',
           message: data.error || 'Invalid license key',
         });
-        setSubscriptionPlan('free');
-        chrome.storage.sync.set({ 
-          licenseKey: '',
-          subscriptionPlan: 'free' 
-        }, () => {
-          setLicenseKey('');
-          handleSubscriptionPlanChange('free');
-        });
+        resetToFreePlan();
       }
     } catch (error) {
       console.error('License validation error:', error);
@@ -297,13 +343,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         message: 'Failed to validate license. Please check your connection.',
       });
       // On error, revert to free plan
-      setSubscriptionPlan('free');
-      chrome.storage.sync.set({ 
-        licenseKey: '',
-        subscriptionPlan: 'free' 
-      }, () => {
-        handleSubscriptionPlanChange('free');
-      });
+      resetToFreePlan();
     }
   };
 
@@ -378,47 +418,46 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   }, [selectedPackages, defaultRole]);
 
   const getCurrentPlan = (): SubscriptionPlan | undefined => {
-    return SUBSCRIPTION_PLANS.find(p => p.name === subscriptionPlan);
+    return subscriptionPlans.find(p => p.name === subscriptionPlan);
+  };
+
+  /**
+   * Reset to Free plan - clears license and sets packages to generic only
+   */
+  const resetToFreePlan = () => {
+    setLicenseKey('');
+    setSubscriptionPlan('free');
+    setSelectedPackages(['generic']); // Free plan only has generic package
+    chrome.storage.sync.set({ 
+      licenseKey: '',
+      subscriptionPlan: 'free',
+      selectedPackages: ['generic']
+    }, () => {
+      handleSubscriptionPlanChange('free');
+    });
   };
 
   const handleSubscriptionPlanChange = (planName: string) => {
-    const newPlan = SUBSCRIPTION_PLANS.find(p => p.name === planName);
-    if (!newPlan) return;
+    // Wait for plans to load
+    if (plansLoading || subscriptionPlans.length === 0) {
+      console.warn('Plans not loaded yet, cannot change plan');
+      return;
+    }
+    
+    const newPlan = subscriptionPlans.find(p => p.name === planName);
+    if (!newPlan) {
+      console.warn(`Plan ${planName} not found`);
+      return;
+    }
 
     const oldPlan = getCurrentPlan();
     const oldTier = oldPlan?.tier || 0;
     const newTier = newPlan.tier;
 
-    // Handle content packages based on new plan
-    if (!newPlan.contentPackagesAllowed) {
-      // Downgrade: Clear all packages except generic
-      setSelectedPackages(['generic']);
-      setDefaultRole('generic');
-    } else {
-      // Upgrade: Handle allContent flag
-      if (newPlan.allContent) {
-        // Ultimate plan: Auto-select all packages
-        const allPackageNames = ALL_PACKAGES.map(p => p.name);
-        setSelectedPackages(allPackageNames);
-        // Keep current defaultRole if valid, otherwise use first package
-        if (allPackageNames.includes(defaultRole)) {
-          // Keep current
-        } else {
-          setDefaultRole(allPackageNames[0]);
-        }
-      } else {
-        // Pro plan: Keep existing packages if valid, otherwise default to generic
-        if (selectedPackages.length === 0 || (selectedPackages.length === 1 && selectedPackages[0] === 'generic')) {
-          // Keep as is or ensure generic is selected
-          if (selectedPackages.length === 0) {
-            setSelectedPackages(['generic']);
-          }
-        }
-        // Otherwise keep existing selected packages
-      }
-    }
+    // Note: Packages are now determined by license, not by plan selection
+    // This function only handles provider/model settings and validation limits
 
-    // Handle provider/model/numVariants validation - consolidate all updates
+    // Handle provider/model/numVariants validation
     let updatedConfig = { ...config };
 
     // Check provider
@@ -1169,7 +1208,6 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                   style={{ padding: '8px', fontSize: '14px', width: '200px' }}
                 >
                   {selectedPackages.map((pkgName) => {
-                    const pkg = ALL_PACKAGES.find((p) => p.name === pkgName);
                     const displayName = pkgName === 'generic' ? 'Generic' : pkgName.charAt(0).toUpperCase() + pkgName.slice(1);
                     return (
                       <option key={pkgName} value={pkgName}>

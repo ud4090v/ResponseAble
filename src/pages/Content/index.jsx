@@ -1,8 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
-import ALL_PACKAGES_DATA from '../../config/packages.json';
-import SUBSCRIPTION_PLANS_DATA from '../../config/subscriptionPlans.json';
 import { trackDraftGenerated, trackDraftInserted, trackThumbsUp, trackThumbsDown } from './metrics.js';
 
 // Ensure chrome API is available
@@ -289,29 +287,120 @@ const detectPlatform = () => {
     return null;
 };
 
-// Master list of all available packages for email type classification - imported from shared config
-const ALL_PACKAGES = ALL_PACKAGES_DATA;
-const SUBSCRIPTION_PLANS = SUBSCRIPTION_PLANS_DATA;
+// Cache for packages loaded from API
+let cachedPackages = null;
+let packagesLoadPromise = null;
+
+// Minimal generic package fallback (used if API fails)
+const FALLBACK_GENERIC_PACKAGE = {
+    name: 'generic',
+    base: true,
+    description: 'general professional emails not fitting specific categories',
+    intent: 'general inquiry or communication',
+    userIntent: 'I am writing a general professional email',
+    roleDescription: 'a professional email writer',
+    contextSpecific: 'Write a professional, clear, and appropriate response'
+};
+
+// Helper function to load packages from API or cache
+const loadPackagesFromAPI = async () => {
+    // Return cached packages if available
+    if (cachedPackages) {
+        return cachedPackages;
+    }
+
+    // If already loading, wait for that promise
+    if (packagesLoadPromise) {
+        return packagesLoadPromise;
+    }
+
+    // Start loading
+    packagesLoadPromise = (async () => {
+        try {
+            // Try to get from storage first (cached by Options page)
+            const browserAPI = typeof chrome !== 'undefined' && chrome.storage ? chrome : (typeof browser !== 'undefined' && browser.storage ? browser : null);
+            if (browserAPI && browserAPI.storage) {
+                const stored = await new Promise((resolve) => {
+                    browserAPI.storage.sync.get(['cachedPackages', 'cachedPackagesTimestamp'], (result) => {
+                        resolve(result);
+                    });
+                });
+
+                // Use cached packages if less than 1 hour old
+                if (stored.cachedPackages && stored.cachedPackagesTimestamp) {
+                    const cacheAge = Date.now() - stored.cachedPackagesTimestamp;
+                    if (cacheAge < 3600000) { // 1 hour
+                        cachedPackages = stored.cachedPackages;
+                        packagesLoadPromise = null;
+                        return cachedPackages;
+                    }
+                }
+            }
+
+            // Fetch from API
+            const response = await fetch(`${VERCEL_PROXY_URL}/packages/definitions`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            if (!response.ok) {
+                throw new Error(`API returned ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            if (data.success && data.packages && Array.isArray(data.packages)) {
+                cachedPackages = data.packages;
+                
+                // Cache in storage
+                if (browserAPI && browserAPI.storage) {
+                    browserAPI.storage.sync.set({
+                        cachedPackages: cachedPackages,
+                        cachedPackagesTimestamp: Date.now(),
+                    });
+                }
+                
+                packagesLoadPromise = null;
+                return cachedPackages;
+            } else {
+                throw new Error('Invalid API response');
+            }
+        } catch (error) {
+            console.error('Failed to load packages from API:', error);
+            // Fallback to generic package only
+            cachedPackages = [FALLBACK_GENERIC_PACKAGE];
+            packagesLoadPromise = null;
+            return cachedPackages;
+        }
+    })();
+
+    return packagesLoadPromise;
+};
 
 // Helper function to get the base package name dynamically
-const getBasePackageName = () => {
-    const basePackage = ALL_PACKAGES_DATA.find(p => p.base === true);
+const getBasePackageName = async () => {
+    const packages = await loadPackagesFromAPI();
+    const basePackage = packages.find(p => p.base === true);
     return basePackage ? basePackage.name : 'generic'; // Fallback if no base package found
 };
 
 // Function to get user's default role from storage
 const getDefaultRole = async () => {
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
         const browserAPI = typeof chrome !== 'undefined' && chrome.storage ? chrome : (typeof browser !== 'undefined' && browser.storage ? browser : null);
         if (!browserAPI || !browserAPI.storage) {
-            resolve(getBasePackageName());
+            const baseName = await getBasePackageName();
+            resolve(baseName);
             return;
         }
 
-        browserAPI.storage.sync.get(['defaultRole'], (result) => {
+        browserAPI.storage.sync.get(['defaultRole'], async (result) => {
+            const baseName = await getBasePackageName();
             const defaultRole = result.defaultRole && typeof result.defaultRole === 'string'
                 ? result.defaultRole
-                : getBasePackageName();
+                : baseName;
             resolve(defaultRole);
         });
     });
@@ -319,42 +408,46 @@ const getDefaultRole = async () => {
 
 // Function to get user-selected packages from storage, defaulting to base package if none selected
 const getUserPackages = async () => {
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
+        // Load packages from API first
+        const allPackages = await loadPackagesFromAPI();
+        
         const browserAPI = typeof chrome !== 'undefined' && chrome.storage ? chrome : (typeof browser !== 'undefined' && browser.storage ? browser : null);
         if (!browserAPI || !browserAPI.storage) {
             // Fallback to base package if storage is not available
-            resolve(ALL_PACKAGES.filter(p => p.base));
+            resolve(allPackages.filter(p => p.base));
             return;
         }
 
-        browserAPI.storage.sync.get(['selectedPackages', 'subscriptionPlan'], (result) => {
+        browserAPI.storage.sync.get(['selectedPackages', 'subscriptionPlan', 'licenseKey'], async (result) => {
             // Get subscription plan, default to 'free' if not set
             const subscriptionPlanName = result.subscriptionPlan && typeof result.subscriptionPlan === 'string'
                 ? result.subscriptionPlan
                 : 'free';
 
-            // Find subscription plan config
-            const subscriptionPlan = SUBSCRIPTION_PLANS.find(p => p.name === subscriptionPlanName) || SUBSCRIPTION_PLANS.find(p => p.name === 'free');
+            // Check if Ultimate plan (allContent) - get from license validation if available
+            // For now, check if subscriptionPlan is 'ultimate'
+            const isUltimatePlan = subscriptionPlanName === 'ultimate';
 
             // Check if allContent is enabled (Ultimate plan)
-            if (subscriptionPlan && subscriptionPlan.allContent) {
+            if (isUltimatePlan) {
                 // Return all packages - no filtering needed
-                resolve(ALL_PACKAGES);
+                resolve(allPackages);
                 return;
             }
 
             // Otherwise, use existing logic with selectedPackages
-            const basePackageName = getBasePackageName();
+            const basePackageName = await getBasePackageName();
             const selectedPackageNames = result.selectedPackages && Array.isArray(result.selectedPackages) && result.selectedPackages.length > 0
                 ? result.selectedPackages
                 : [basePackageName]; // Default to base package if none selected
 
-            // Filter ALL_PACKAGES to only include selected packages
-            const userPackages = ALL_PACKAGES.filter(p => selectedPackageNames.includes(p.name));
+            // Filter packages to only include selected packages
+            const userPackages = allPackages.filter(p => selectedPackageNames.includes(p.name));
 
             // Ensure base package is always available as fallback
             if (userPackages.length === 0 || !userPackages.find(p => p.base)) {
-                const genericPackage = ALL_PACKAGES.find(p => p.base);
+                const genericPackage = allPackages.find(p => p.base);
                 if (genericPackage) {
                     userPackages.push(genericPackage);
                 }
@@ -627,12 +720,13 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         const confidence = typeMatchResult.confidence !== undefined ? typeMatchResult.confidence : 0;
         const minConfidence = apiConfig.classificationConfidenceThreshold !== undefined ? apiConfig.classificationConfidenceThreshold : 0.85;
         if (confidence < minConfidence && matchedType && !matchedType.base) {
-            matchedType = userPackages.find(p => p.base) || ALL_PACKAGES.find(p => p.base);
+            // userPackages always includes base package, so this should always find it
+            matchedType = userPackages.find(p => p.base);
         }
 
-        // Ensure matchedType has the base property by finding it in userPackages or ALL_PACKAGES
+        // Ensure matchedType has the base property by finding it in userPackages
         if (matchedType && !matchedType.hasOwnProperty('base')) {
-            const foundPackage = userPackages.find(p => p.name === matchedType.name) || ALL_PACKAGES.find(p => p.name === matchedType.name);
+            const foundPackage = userPackages.find(p => p.name === matchedType.name);
             if (foundPackage) {
                 matchedType = foundPackage;
             }
@@ -4327,10 +4421,11 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     const selectedPackageNames = selectedPackages.map(p => p.name).join(', ');
 
     // Get matched type information from classification
-    // Use ALL_PACKAGES (not userPackages) to get the full package definition with base property
+    // Load all packages to find the matched type (may not be in userPackages)
     let matchedTypeInfo = null;
     if (classification && classification.type) {
-        const matchedPackage = ALL_PACKAGES.find(p => p.name === classification.type);
+        const allPackages = await loadPackagesFromAPI();
+        const matchedPackage = allPackages.find(p => p.name === classification.type);
         if (matchedPackage) {
             matchedTypeInfo = {
                 name: matchedPackage.base === true ? (matchedPackage.name.charAt(0).toUpperCase() + matchedPackage.name.slice(1)) : matchedPackage.name,
