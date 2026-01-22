@@ -85,6 +85,13 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     plan?: string;
     expiresAt?: string;
   }>({ status: 'idle', message: '' });
+  const [packagesData, setPackagesData] = useState<{
+    included: Array<{ id: string; name: string; description: string; status: string }>;
+    purchased: Array<{ id: string; name: string; description: string; status: string; payment_status?: string }>;
+    available: Array<{ id: string; name: string; description: string; price_usd: number }>;
+    all_active: string[];
+  } | null>(null);
+  const [packagesLoading, setPackagesLoading] = useState<boolean>(false);
 
   useEffect(() => {
     // Get icon URL
@@ -93,6 +100,27 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       setIconUrl(url);
     } catch (error) {
       console.error('Failed to get icon URL:', error);
+    }
+
+    // Handle purchase success/cancel from URL params
+    const urlParams = new URLSearchParams(window.location.search);
+    const purchaseStatus = urlParams.get('purchase');
+    const packageName = urlParams.get('package');
+
+    if (purchaseStatus === 'success' && packageName) {
+      // Show success message
+      alert(`Successfully purchased ${packageName} package! Refreshing packages...`);
+      // Refresh packages if license is active
+      if (licenseKey && licenseKey.trim().length > 0) {
+        fetchPackages(licenseKey);
+      }
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (purchaseStatus === 'cancel') {
+      // Show cancel message (optional, can be silent)
+      console.log('Package purchase was cancelled');
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname);
     }
 
     // Load saved settings
@@ -127,7 +155,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       // Load license key if exists
       if (result.licenseKey) {
         setLicenseKey(result.licenseKey);
-        // Validate license on load
+        // Validate license on load (this will also fetch packages)
         validateLicenseKey(result.licenseKey, false);
       } else {
         // No license key - ensure plan is set to free
@@ -142,6 +170,45 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   }, []);
 
   /**
+   * Fetch packages for the current license
+   * @param key - License key
+   */
+  const fetchPackages = async (key: string) => {
+    if (!key || key.trim().length === 0) {
+      setPackagesData(null);
+      return;
+    }
+
+    setPackagesLoading(true);
+    try {
+      const response = await fetch(`${VERCEL_PROXY_URL}/packages/list`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ licenseKey: key.trim() }),
+      });
+
+      const data = await response.json();
+
+      if (data.valid && data.packages) {
+        setPackagesData(data.packages);
+        // Update selected packages based on active packages from API
+        if (data.packages.all_active && data.packages.all_active.length > 0) {
+          setSelectedPackages(data.packages.all_active);
+        }
+      } else {
+        setPackagesData(null);
+      }
+    } catch (error) {
+      console.error('Error fetching packages:', error);
+      setPackagesData(null);
+    } finally {
+      setPackagesLoading(false);
+    }
+  };
+
+  /**
    * Validate license key with the API
    * @param key - License key to validate
    * @param saveOnSuccess - Whether to save key to storage if valid
@@ -150,7 +217,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     if (!key || key.trim().length === 0) {
       setLicenseStatus({
         status: 'error',
-        message: 'Please enter a license key',
+        message: 'Please enter a license key. Get access at https://xrepl.ai/pricing',
       });
       // No license key - revert to free plan
       setSubscriptionPlan('free');
@@ -205,6 +272,9 @@ const Options: React.FC<Props> = ({ title }: Props) => {
             handleSubscriptionPlanChange(data.plan || 'free');
           });
         }
+
+        // Fetch packages for this license
+        await fetchPackages(key.trim());
       } else {
         // License is invalid - revert to free plan
         setLicenseStatus({
@@ -242,6 +312,62 @@ const Options: React.FC<Props> = ({ title }: Props) => {
    */
   const handleActivateLicense = () => {
     validateLicenseKey(licenseKey, true);
+  };
+
+  /**
+   * Handle package purchase
+   * @param packageId - Package ID to purchase
+   * @param packageName - Package name for display
+   */
+  const handlePackagePurchase = async (packageId: string, packageName: string) => {
+    if (!licenseKey || licenseKey.trim().length === 0) {
+      alert('Please activate your license key first.');
+      return;
+    }
+
+    if (licenseStatus.status !== 'success') {
+      alert('Please ensure your license key is valid before purchasing packages.');
+      return;
+    }
+
+    // Confirm purchase
+    const confirmed = confirm(`Purchase ${packageName} package? You will be redirected to Stripe checkout.`);
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      // Get current extension options page URL for success/cancel redirects
+      const optionsPageUrl = chrome.runtime.getURL('options.html');
+      const successUrl = `${optionsPageUrl}?purchase=success&package=${packageName}`;
+      const cancelUrl = `${optionsPageUrl}?purchase=cancel`;
+
+      // Call purchase API
+      const response = await fetch(`${VERCEL_PROXY_URL}/packages/purchase`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          licenseKey: licenseKey.trim(),
+          packageId: packageId,
+          successUrl: successUrl,
+          cancelUrl: cancelUrl,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success && data.checkout_url) {
+        // Redirect to Stripe checkout
+        window.location.href = data.checkout_url;
+      } else {
+        alert(data.error || 'Failed to create checkout session. Please try again.');
+      }
+    } catch (error) {
+      console.error('Package purchase error:', error);
+      alert('Failed to initiate purchase. Please check your connection and try again.');
+    }
   };
 
   // Auto-reset default role to generic if it's not in selected packages
@@ -557,7 +683,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                       fontSize: '13px',
                     }}
                   >
-                    View Pricing
+                    Get Access
                   </a>
                 )}
               </div>
@@ -797,102 +923,230 @@ const Options: React.FC<Props> = ({ title }: Props) => {
               <h2>Subscription Plan</h2>
               <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
                 {licenseStatus.status === 'success' && licenseStatus.plan
-                  ? 'Your subscription plan is determined by your active license key.'
+                  ? `Your subscription plan is determined by your active license key. You are currently on the ${licenseStatus.plan.charAt(0).toUpperCase() + licenseStatus.plan.slice(1)} plan.`
                   : 'Activate a license key above to unlock paid plans. Without a license, you are limited to the Free plan.'}
               </p>
 
-              <div className="SettingGroup">
-                <label htmlFor="subscription-plan">Subscription Plan:</label>
-                <select
-                  id="subscription-plan"
-                  value={subscriptionPlan}
-                  onChange={(e) => {
-                    // Only allow changing to free plan if no valid license
-                    if (licenseStatus.status !== 'success' || !licenseStatus.plan) {
-                      if (e.target.value !== 'free') {
-                        alert('Please activate a valid license key to use paid plans.');
-                        return;
-                      }
-                    }
-                    handleSubscriptionPlanChange(e.target.value);
-                  }}
-                  disabled={licenseStatus.status !== 'success' || !licenseStatus.plan}
-                  style={{ 
-                    padding: '8px', 
-                    fontSize: '14px', 
-                    width: '200px',
-                    opacity: (licenseStatus.status !== 'success' || !licenseStatus.plan) ? 0.6 : 1,
-                    cursor: (licenseStatus.status !== 'success' || !licenseStatus.plan) ? 'not-allowed' : 'pointer'
-                  }}
-                >
-                  {SUBSCRIPTION_PLANS.map((plan) => (
-                    <option key={plan.name} value={plan.name}>
-                      {plan.name.charAt(0).toUpperCase() + plan.name.slice(1)}
-                    </option>
-                  ))}
-                </select>
-                {licenseStatus.status !== 'success' || !licenseStatus.plan ? (
-                  <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#ea4335' }}>
-                    ⚠️ License key required for paid plans. Currently using Free plan limits.
-                  </p>
-                ) : (
-                  currentPlan && (
-                    <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+              {/* Plan Details Display */}
+              {licenseStatus.status === 'success' && licenseStatus.plan && currentPlan ? (
+                <div className="SettingGroup">
+                  <div style={{ 
+                    padding: '16px', 
+                    border: '1px solid #e0e0e0', 
+                    borderRadius: '4px', 
+                    backgroundColor: '#f8f9fa',
+                    marginBottom: '20px'
+                  }}>
+                    <div style={{ fontWeight: '600', marginBottom: '8px', fontSize: '16px' }}>
+                      {currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} Plan Details
+                    </div>
+                    <p className="HelpText" style={{ marginTop: '8px', fontSize: '13px', color: '#5f6368' }}>
                       Max Goals: {currentPlan.maxGoals} | Max Variants: {currentPlan.maxVariants} | Max Tones: {currentPlan.maxTones} |
                       Generations: {currentPlan.maxGenerationsPerMonth === 999999999999 ? 'Unlimited' : currentPlan.maxGenerationsPerMonth}/month
                     </p>
-                  )
-                )}
-              </div>
-
-              {/* Email Type Packages Section - Only show if contentPackagesAllowed */}
-              {currentPlan?.contentPackagesAllowed && (
-                <>
-                  <h2 style={{ marginTop: '40px' }}>Email Type Packages</h2>
-                  <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
-                    Select which email type packages to use for classification. Multiple selections are allowed.
-                    If no packages are selected, "generic" will be used by default.
-                    {currentPlan.allContent && ' (All packages are automatically selected for Ultimate plan)'}
-                  </p>
-
-                  <div className="SettingGroup">
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      {ALL_PACKAGES.map((pkg) => (
-                        <label
-                          key={pkg.name}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            cursor: currentPlan.allContent ? 'not-allowed' : 'pointer',
-                            padding: '12px',
-                            border: '1px solid #e0e0e0',
-                            borderRadius: '4px',
-                            backgroundColor: selectedPackages.includes(pkg.name) ? '#f0f7ff' : '#fff',
-                            opacity: currentPlan.allContent ? 0.7 : 1,
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedPackages.includes(pkg.name)}
-                            onChange={() => handlePackageToggle(pkg.name)}
-                            disabled={currentPlan.allContent}
-                            style={{ marginRight: '12px', marginTop: '2px', cursor: currentPlan.allContent ? 'not-allowed' : 'pointer' }}
-                          />
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
-                              {pkg.name}
-                            </div>
-                            <div style={{ fontSize: '13px', color: '#5f6368', marginBottom: '4px' }}>
-                              {pkg.description}
-                            </div>
-                          </div>
-                        </label>
-                      ))}
-                    </div>
-                    <p className="HelpText" style={{ marginTop: '12px', fontSize: '12px', color: '#5f6368' }}>
-                      Selected packages: {selectedPackages.length > 0 ? selectedPackages.join(', ') : 'generic (default)'}
-                    </p>
+                    <button
+                      onClick={() => {
+                        window.open('https://xrepl.ai/pricing', '_blank');
+                      }}
+                      style={{
+                        marginTop: '12px',
+                        padding: '8px 16px',
+                        backgroundColor: '#1a73e8',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: '500',
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.backgroundColor = '#1557b0';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.backgroundColor = '#1a73e8';
+                      }}
+                    >
+                      Upgrade Plan
+                    </button>
                   </div>
+                </div>
+              ) : (
+                <div className="SettingGroup">
+                  <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#ea4335' }}>
+                    ⚠️ License key required for paid plans. Currently using Free plan limits.
+                  </p>
+                </div>
+              )}
+
+              {/* Active Packages Section - Show packages from API */}
+              {licenseStatus.status === 'success' && (
+                <>
+                  <h2 style={{ marginTop: '40px' }}>Your Packages</h2>
+                  {packagesLoading ? (
+                    <p className="HelpText" style={{ marginBottom: '20px' }}>Loading packages...</p>
+                  ) : packagesData ? (
+                    <>
+                      {/* Included Packages */}
+                      {packagesData.included && packagesData.included.length > 0 && (
+                        <div style={{ marginBottom: '24px' }}>
+                          <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px', color: '#1a73e8' }}>
+                            Included Packages
+                          </h3>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {packagesData.included.map((pkg) => (
+                              <div
+                                key={pkg.id}
+                                style={{
+                                  padding: '12px',
+                                  border: '1px solid #e0e0e0',
+                                  borderRadius: '4px',
+                                  backgroundColor: '#f0f7ff',
+                                }}
+                              >
+                                <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
+                                  {pkg.name}
+                                  {pkg.status === 'active' && (
+                                    <span style={{ marginLeft: '8px', fontSize: '12px', color: '#34a853', fontWeight: 'normal' }}>
+                                      ✓ Active
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: '13px', color: '#5f6368' }}>{pkg.description}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Purchased Packages */}
+                      {packagesData.purchased && packagesData.purchased.length > 0 && (
+                        <div style={{ marginBottom: '24px' }}>
+                          <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px', color: '#1a73e8' }}>
+                            Purchased Packages
+                          </h3>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {packagesData.purchased.map((pkg) => (
+                              <div
+                                key={pkg.id}
+                                style={{
+                                  padding: '12px',
+                                  border: '1px solid #e0e0e0',
+                                  borderRadius: '4px',
+                                  backgroundColor: pkg.status === 'active' ? '#f0f7ff' : '#fff3cd',
+                                }}
+                              >
+                                <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
+                                  {pkg.name}
+                                  <span style={{ marginLeft: '8px', fontSize: '12px', color: pkg.status === 'active' ? '#34a853' : '#ea4335', fontWeight: 'normal' }}>
+                                    {pkg.status === 'active' ? '✓ Active' : `⚠ ${pkg.status}`}
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: '13px', color: '#5f6368' }}>{pkg.description}</div>
+                                {pkg.payment_status && (
+                                  <div style={{ fontSize: '12px', color: '#5f6368', marginTop: '4px' }}>
+                                    Payment: {pkg.payment_status}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Available Packages for Purchase */}
+                      {packagesData.available && packagesData.available.length > 0 && (
+                        <div style={{ marginBottom: '24px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                            <h3 style={{ fontSize: '16px', fontWeight: '600', color: '#1a73e8', margin: 0 }}>
+                              Available Packages
+                            </h3>
+                            <button
+                              onClick={() => {
+                                window.open('https://xrepl.ai/pricing', '_blank');
+                              }}
+                              style={{
+                                padding: '6px 12px',
+                                backgroundColor: '#1a73e8',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '13px',
+                                fontWeight: '500',
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.backgroundColor = '#1557b0';
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.backgroundColor = '#1a73e8';
+                              }}
+                            >
+                              Get Additional Packages
+                            </button>
+                          </div>
+                          <p className="HelpText" style={{ marginBottom: '12px', fontSize: '13px' }}>
+                            Purchase additional packages to unlock more email types.
+                          </p>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {packagesData.available.map((pkg) => (
+                              <div
+                                key={pkg.id}
+                                style={{
+                                  padding: '12px',
+                                  border: '1px solid #e0e0e0',
+                                  borderRadius: '4px',
+                                  backgroundColor: '#fff',
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                }}
+                              >
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
+                                    {pkg.name}
+                                  </div>
+                                  <div style={{ fontSize: '13px', color: '#5f6368' }}>{pkg.description}</div>
+                                </div>
+                                <button
+                                  onClick={() => handlePackagePurchase(pkg.id, pkg.name)}
+                                  style={{
+                                    padding: '8px 16px',
+                                    backgroundColor: '#1a73e8',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '14px',
+                                    fontWeight: '500',
+                                  }}
+                                  onMouseOver={(e) => {
+                                    e.currentTarget.style.backgroundColor = '#1557b0';
+                                  }}
+                                  onMouseOut={(e) => {
+                                    e.currentTarget.style.backgroundColor = '#1a73e8';
+                                  }}
+                                >
+                                  Purchase ${pkg.price_usd.toFixed(2)}
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {(!packagesData.included || packagesData.included.length === 0) &&
+                        (!packagesData.purchased || packagesData.purchased.length === 0) &&
+                        (!packagesData.available || packagesData.available.length === 0) && (
+                          <p className="HelpText" style={{ marginBottom: '20px' }}>
+                            No packages available. The generic package is always included.
+                          </p>
+                        )}
+                    </>
+                  ) : (
+                    <p className="HelpText" style={{ marginBottom: '20px' }}>
+                      Unable to load packages. Please check your license key.
+                    </p>
+                  )}
                 </>
               )}
             </div>
