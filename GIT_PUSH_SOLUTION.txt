@@ -1,0 +1,110 @@
+================================================================================
+GITHUB PUSH ERROR - REPOSITORY RULE VIOLATIONS
+================================================================================
+
+ERROR: push declined due to repository rule violations
+
+================================================================================
+PROBLEM ANALYSIS
+================================================================================
+
+You're trying to push to the 'main' branch, but GitHub has repository rules
+that prevent direct pushes to main. This is a common security practice.
+
+Current Situation:
+- You're on branch: commit
+- Trying to push to: main
+- Repository: responseable-api
+
+================================================================================
+SOLUTIONS
+================================================================================
+
+OPTION 1: Push to Your Current Branch (Recommended)
+----------------------------------------------------
+If you want to push your current branch 'commit':
+
+  git push origin commit
+
+This will push to origin/commit branch, which you can then merge via PR.
+
+OPTION 2: Create a Pull Request
+--------------------------------
+1. Push your current branch:
+   git push origin commit
+
+2. Go to GitHub and create a Pull Request:
+   - From: commit
+   - To: main
+   - Add reviewers if required
+   - Wait for status checks to pass
+
+OPTION 3: Check Repository Rules
+----------------------------------
+Go to GitHub repository settings:
+1. Settings → Rules → Rulesets
+2. Check what rules are blocking pushes to main
+3. Common rules:
+   - Require pull request reviews
+   - Require status checks to pass
+   - Require branches to be up to date
+   - Restrict who can push to matching branches
+
+OPTION 4: Push to Different Branch
+------------------------------------
+If you need to push directly:
+
+  git checkout -b feature/your-feature-name
+  git push origin feature/your-feature-name
+
+Then create PR from feature branch to main.
+
+================================================================================
+RECOMMENDED WORKFLOW
+================================================================================
+
+1. Work on feature branch (not main):
+   git checkout -b feature/your-feature
+   # Make changes
+   git add .
+   git commit -m "Your commit message"
+   git push origin feature/your-feature
+
+2. Create Pull Request on GitHub:
+   - From: feature/your-feature
+   - To: main
+   - Get reviews
+   - Merge when approved
+
+3. Update local main:
+   git checkout main
+   git pull origin main
+
+================================================================================
+CHECKING FOR ISSUES
+================================================================================
+
+Check if .env file is accidentally committed:
+  git ls-files | grep "\.env$"
+
+If .env is listed, remove it:
+  git rm --cached .env
+  git commit -m "Remove .env from tracking"
+  # Add .env to .gitignore if not already there
+
+Check for large files:
+  git ls-files | ForEach-Object { Get-Item $_ -ErrorAction SilentlyContinue | Select-Object Name, @{Name="Size";Expression={$_.Length}} } | Where-Object { $_.Size -gt 10MB }
+
+================================================================================
+QUICK FIX
+================================================================================
+
+To push your current branch 'commit':
+
+  git push origin commit
+
+Then create a Pull Request on GitHub to merge 'commit' into 'main'.
+
+================================================================================
+END OF GUIDE
+================================================================================

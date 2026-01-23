@@ -22,3 +22,8 @@
 
 # secrets
 secrets.*.js
+
+# Documentation files that may contain API keys
+cursor_*.md
+*.md
+!README.md
