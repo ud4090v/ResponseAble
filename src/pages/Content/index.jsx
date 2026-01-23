@@ -31,12 +31,30 @@ const RESPONSE_VARIANT_SEPARATOR = '|||RESPONSE_VARIANT|||';
 
 // Helper function to call new streaming API endpoints
 const callNewStreamingAPI = async (url, body, onChunk = null, abortSignal = null) => {
+    // Get license key from storage and add it to the request body
+    const licenseKey = await new Promise((resolve) => {
+        const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
+        if (!storage) {
+            resolve(null);
+            return;
+        }
+        storage.sync.get(['licenseKey'], (result) => {
+            resolve(result.licenseKey || null);
+        });
+    });
+
+    // Add license key to request body
+    const requestBody = {
+        ...body,
+        licenseKey: licenseKey || null
+    };
+
     const response = await fetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(requestBody),
         signal: abortSignal
     });
 
@@ -350,10 +368,10 @@ const loadPackagesFromAPI = async () => {
             }
 
             const data = await response.json();
-            
+
             if (data.success && data.packages && Array.isArray(data.packages)) {
                 cachedPackages = data.packages;
-                
+
                 // Cache in storage
                 if (browserAPI && browserAPI.storage) {
                     browserAPI.storage.sync.set({
@@ -361,7 +379,7 @@ const loadPackagesFromAPI = async () => {
                         cachedPackagesTimestamp: Date.now(),
                     });
                 }
-                
+
                 packagesLoadPromise = null;
                 return cachedPackages;
             } else {
@@ -411,7 +429,7 @@ const getUserPackages = async () => {
     return new Promise(async (resolve) => {
         // Load packages from API first
         const allPackages = await loadPackagesFromAPI();
-        
+
         const browserAPI = typeof chrome !== 'undefined' && chrome.storage ? chrome : (typeof browser !== 'undefined' && browser.storage ? browser : null);
         if (!browserAPI || !browserAPI.storage) {
             // Fallback to base package if storage is not available
@@ -4416,13 +4434,13 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     // Check if this is a new email (not a reply)
     const isNewEmail = newEmailParams && newEmailParams.isNewEmail === true;
 
-    // Get selected packages for display
+    // Get selected packages for display (only show the matched package, not all available packages)
     const selectedPackages = await getUserPackages();
-    const selectedPackageNames = selectedPackages.map(p => p.name).join(', ');
-
+    
     // Get matched type information from classification
     // Load all packages to find the matched type (may not be in userPackages)
     let matchedTypeInfo = null;
+    let selectedPackageNames = '';
     if (classification && classification.type) {
         const allPackages = await loadPackagesFromAPI();
         const matchedPackage = allPackages.find(p => p.name === classification.type);
@@ -4431,7 +4449,12 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                 name: matchedPackage.base === true ? (matchedPackage.name.charAt(0).toUpperCase() + matchedPackage.name.slice(1)) : matchedPackage.name,
                 description: matchedPackage.description
             };
+            // Only show the matched package name, not all available packages
+            selectedPackageNames = matchedPackage.name;
         }
+    } else {
+        // Fallback: if no classification, show all user packages (legacy behavior)
+        selectedPackageNames = selectedPackages.map(p => p.name).join(', ');
     }
     const overlay = document.createElement('div');
     overlay.className = 'responseable-overlay';
@@ -4656,23 +4679,23 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
       ${classification ? `<p id="sender-intent-text" style="color:#5f6368; margin-top: ${matchedTypeInfo || selectedPackageNames ? '0' : '-8px'}; margin-bottom: 12px; font-size: 12px;"><strong>${isNewEmail ? 'Sender Intent' : 'Intent'}:</strong> ${classification.intent || 'general inquiry'}${classification.key_topics && classification.key_topics.length > 0 ? ` | Topics: ${classification.key_topics.join(', ')}` : ''}</p>` : ''}
       ${responseGoals.length > 1 && !(classification && classification.isGenericSingleDraft) ? `
       <div id="goals-tabs-container" style="margin-bottom: 16px; border-bottom: 1px solid #dadce0; padding-bottom: 8px;">
-        <div style="display: flex; flex-wrap: wrap; gap: 0;">
-          ${tabsHtml}
-        </div>
-        <div id="goal-description" style="margin-top: 12px; padding: 8px 12px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #5f6368; min-height: 20px;">
-          <strong>Goal:</strong> <span id="goal-description-text">${currentGoal}</span>
-        </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 0;">
+        ${tabsHtml}
       </div>
-      ` : ''}
-      ${classification && classification.tone_sets && classification.tone_sets[currentGoal] && classification.tone_sets[currentGoal].length > 1 ? `
+      <div id="goal-description" style="margin-top: 12px; padding: 8px 12px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #5f6368; min-height: 20px;">
+        <strong>Goal:</strong> <span id="goal-description-text">${currentGoal}</span>
+      </div>
+    </div>
+    ` : ''}
+    ${classification && classification.tone_sets && classification.tone_sets[currentGoal] && classification.tone_sets[currentGoal].length > 1 ? `
       <div id="tone-selector-container" style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-        <label for="tone-selector" style="font-size: 13px; color: #5f6368; font-weight: 500;">Tone:</label>
-        <select id="tone-selector" style="padding: 6px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px; background: white; color: #202124; cursor: pointer;">
-          ${classification.tone_sets[currentGoal].map(tone => `<option value="${tone}" ${tone === currentTone ? 'selected' : ''}>${tone}</option>`).join('')}
-        </select>
-        <span id="regenerate-status" style="font-size: 12px; color: #5f6368; margin-left: 8px;"></span>
-      </div>
-      ` : ''}
+      <label for="tone-selector" style="font-size: 13px; color: #5f6368; font-weight: 500;">Tone:</label>
+      <select id="tone-selector" style="padding: 6px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px; background: white; color: #202124; cursor: pointer;">
+        ${classification.tone_sets[currentGoal].map(tone => `<option value="${tone}" ${tone === currentTone ? 'selected' : ''}>${tone}</option>`).join('')}
+      </select>
+      <span id="regenerate-status" style="font-size: 12px; color: #5f6368; margin-left: 8px;"></span>
+    </div>
+    ` : ''}
       <p id="draft-instruction-text" style="color:#5f6368; margin-top: 0; display: ${draftsHtml ? 'block' : 'none'};">Click any draft to insert it</p>
     </div>
     <div id="drafts-container" style="flex: 1; overflow-y: auto; min-height: 0; margin: 12px 0;">
@@ -4694,8 +4717,8 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
         </div>
       </div>
       <button id="responseable-close-button" style="width: 100%; padding:10px 16px; background:#1a73e8; color:white; border:none; border-radius:4px; cursor:pointer; font-size: 14px; font-weight: 500;">
-        Close
-      </button>
+      Close
+    </button>
     </div>
   `;
 

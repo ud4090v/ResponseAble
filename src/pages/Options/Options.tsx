@@ -224,9 +224,27 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       if (data.valid && data.packages) {
         setPackagesData(data.packages);
         // Update selected packages based on active packages from API
-        if (data.packages.all_active && data.packages.all_active.length > 0) {
-          setSelectedPackages(data.packages.all_active);
-        }
+        // Only use all_active if it contains packages the user actually owns (included or purchased)
+        const ownedPackages = [
+          ...(data.packages.included?.map((p: any) => p.name) || []),
+          ...(data.packages.purchased?.map((p: any) => p.name) || [])
+        ];
+        // Always include generic (base package)
+        const activePackages = ownedPackages.length > 0 
+          ? (ownedPackages.includes('generic') ? ownedPackages : ['generic', ...ownedPackages])
+          : ['generic'];
+        setSelectedPackages(activePackages);
+        
+        // Set default role intelligently: prefer first non-generic package, otherwise generic
+        // Only update if current defaultRole is not in the new packages list
+        setDefaultRole((currentRole) => {
+          if (activePackages.includes(currentRole)) {
+            return currentRole; // Keep current if it's still valid
+          }
+          // Find first non-generic package, or fall back to generic
+          const firstNonGeneric = activePackages.find(pkg => pkg !== 'generic');
+          return firstNonGeneric || 'generic';
+        });
         
         // Cache full package definitions for Content Script
         // Fetch full definitions and cache them
@@ -601,7 +619,9 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     ),
   };
 
-  const showDefaultRoleTab = selectedPackages.length > 1 || (selectedPackages.length === 1 && !selectedPackages.includes('generic'));
+  // Show Default Role tab if user has multiple packages OR has at least one non-generic package
+  const hasNonGenericPackages = selectedPackages.some(pkg => pkg !== 'generic');
+  const showDefaultRoleTab = selectedPackages.length > 1 || hasNonGenericPackages;
 
   return (
     <div className="OptionsContainer">
@@ -764,46 +784,46 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         <div className="TabContent">
           {/* Models Tab */}
           {activeTab === 'models' && (
-            <div className="SettingsSection">
-              <h2>API Configuration</h2>
-              <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
-                Select your preferred AI provider and model. API keys are managed by the extension developer.
-              </p>
+        <div className="SettingsSection">
+          <h2>API Configuration</h2>
+          <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
+            Select your preferred AI provider and model. API keys are managed by the extension developer.
+          </p>
 
-              <div className="SettingGroup">
-                <label htmlFor="api-provider">API Provider:</label>
-                <select
-                  id="api-provider"
-                  value={config.provider}
-                  onChange={(e) => handleProviderChange(e.target.value as ApiConfig['provider'])}
-                >
+          <div className="SettingGroup">
+            <label htmlFor="api-provider">API Provider:</label>
+            <select
+              id="api-provider"
+              value={config.provider}
+              onChange={(e) => handleProviderChange(e.target.value as ApiConfig['provider'])}
+            >
                   {filteredProviders.map(([key, value]) => (
-                    <option key={key} value={key}>
-                      {value.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                <option key={key} value={key}>
+                  {value.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
-              <div className="SettingGroup">
-                <label htmlFor="api-model">Model:</label>
-                <select
-                  id="api-model"
-                  value={config.model}
+          <div className="SettingGroup">
+            <label htmlFor="api-model">Model:</label>
+            <select
+              id="api-model"
+              value={config.model}
                   onChange={(e) => {
                     // Validate model is available for current plan
                     if (availableModelsForProvider.includes(e.target.value)) {
                       setConfig({ ...config, model: e.target.value });
                     }
                   }}
-                >
-                  {currentProviderConfig.models.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            >
+              {currentProviderConfig.models.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </div>
 
             </div>
           )}
@@ -816,24 +836,24 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 Configure preferences for draft generation and email classification.
               </p>
 
-              <div className="SettingGroup">
-                <label htmlFor="num-variants">Number of Variants:</label>
-                <input
-                  id="num-variants"
-                  type="number"
-                  min="1"
+          <div className="SettingGroup">
+            <label htmlFor="num-variants">Number of Variants:</label>
+            <input
+              id="num-variants"
+              type="number"
+              min="1"
                   max={currentPlan?.maxVariants || 7}
-                  value={config.numVariants}
-                  onChange={(e) => {
-                    const value = parseInt(e.target.value, 10);
+              value={config.numVariants}
+              onChange={(e) => {
+                const value = parseInt(e.target.value, 10);
                     const maxVariants = currentPlan?.maxVariants || 7;
                     if (!isNaN(value) && value >= 1 && value <= maxVariants) {
-                      setConfig({ ...config, numVariants: value });
-                    }
-                  }}
-                  style={{ padding: '8px', fontSize: '14px', width: '100px' }}
-                />
-                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                  setConfig({ ...config, numVariants: value });
+                }
+              }}
+              style={{ padding: '8px', fontSize: '14px', width: '100px' }}
+            />
+            <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
                   Number of response variants to generate (1-{currentPlan?.maxVariants || 7})
                   {currentPlan && ` - Your ${currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} plan allows up to ${currentPlan.maxVariants} variants`}
                 </p>
@@ -882,8 +902,8 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
                   Number of tone options to generate (1-{currentPlan?.maxTones || 5})
                   {currentPlan && ` - Your ${currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} plan allows up to ${currentPlan.maxTones} tones`}
-                </p>
-              </div>
+            </p>
+          </div>
 
               {/* Minimum Classification Confidence - Only show for plans with classificationConfidenceEnabled */}
               {currentPlan && currentPlan.classificationConfidenceEnabled && (
@@ -977,7 +997,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                     marginBottom: '20px'
                   }}>
                     <div style={{ fontWeight: '600', marginBottom: '8px', fontSize: '16px' }}>
-                      {currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} Plan Details
+                      {licenseStatus.plan && licenseStatus.plan.charAt(0).toUpperCase() + licenseStatus.plan.slice(1)} Plan Details
                     </div>
                     <p className="HelpText" style={{ marginTop: '8px', fontSize: '13px', color: '#5f6368' }}>
                       Max Goals: {currentPlan.maxGoals} | Max Variants: {currentPlan.maxVariants} | Max Tones: {currentPlan.maxTones} |
@@ -989,20 +1009,15 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                       }}
                       style={{
                         marginTop: '12px',
-                        padding: '8px 16px',
-                        backgroundColor: '#1a73e8',
-                        color: 'white',
+                        padding: '10px 24px',
+                        fontSize: '14px',
+                        fontWeight: '500',
+                        backgroundColor: '#5567b9',
+                        color: '#fff',
                         border: 'none',
                         borderRadius: '4px',
                         cursor: 'pointer',
-                        fontSize: '14px',
-                        fontWeight: '500',
-                      }}
-                      onMouseOver={(e) => {
-                        e.currentTarget.style.backgroundColor = '#1557b0';
-                      }}
-                      onMouseOut={(e) => {
-                        e.currentTarget.style.backgroundColor = '#1a73e8';
+                        whiteSpace: 'nowrap',
                       }}
                     >
                       Upgrade Plan
@@ -1017,14 +1032,20 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 </div>
               )}
 
-              {/* Active Packages Section - Show packages from API */}
+              {/* Your Packages Section - Only show when user owns packages */}
               {licenseStatus.status === 'success' && (
                 <>
-                  <h2 style={{ marginTop: '40px' }}>Your Packages</h2>
                   {packagesLoading ? (
-                    <p className="HelpText" style={{ marginBottom: '20px' }}>Loading packages...</p>
-                  ) : packagesData ? (
                     <>
+                      <h2 style={{ marginTop: '40px' }}>Your Packages</h2>
+                      <p className="HelpText" style={{ marginBottom: '20px' }}>Loading packages...</p>
+                    </>
+                  ) : packagesData && (
+                    (packagesData.included && packagesData.included.length > 0) ||
+                    (packagesData.purchased && packagesData.purchased.length > 0)
+                  ) ? (
+                    <>
+                      <h2 style={{ marginTop: '40px' }}>Your Packages</h2>
                       {/* Included Packages */}
                       {packagesData.included && packagesData.included.length > 0 && (
                         <div style={{ marginBottom: '24px' }}>
@@ -1091,102 +1112,69 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                           </div>
                         </div>
                       )}
-
-                      {/* Available Packages for Purchase */}
-                      {packagesData.available && packagesData.available.length > 0 && (
-                        <div style={{ marginBottom: '24px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                            <h3 style={{ fontSize: '16px', fontWeight: '600', color: '#1a73e8', margin: 0 }}>
-                              Available Packages
-                            </h3>
-                            <button
-                              onClick={() => {
-                                window.open('https://xrepl.ai/pricing', '_blank');
-                              }}
-                              style={{
-                                padding: '6px 12px',
-                                backgroundColor: '#1a73e8',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontSize: '13px',
-                                fontWeight: '500',
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.backgroundColor = '#1557b0';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.backgroundColor = '#1a73e8';
-                              }}
-                            >
-                              Get Additional Packages
-                            </button>
-                          </div>
-                          <p className="HelpText" style={{ marginBottom: '12px', fontSize: '13px' }}>
-                            Purchase additional packages to unlock more email types.
-                          </p>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            {packagesData.available.map((pkg) => (
-                              <div
-                                key={pkg.id}
-                                style={{
-                                  padding: '12px',
-                                  border: '1px solid #e0e0e0',
-                                  borderRadius: '4px',
-                                  backgroundColor: '#fff',
-                                  display: 'flex',
-                                  justifyContent: 'space-between',
-                                  alignItems: 'center',
-                                }}
-                              >
-                                <div style={{ flex: 1 }}>
-                                  <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
-                                    {pkg.name}
-                                  </div>
-                                  <div style={{ fontSize: '13px', color: '#5f6368' }}>{pkg.description}</div>
-                                </div>
-                                <button
-                                  onClick={() => handlePackagePurchase(pkg.id, pkg.name)}
-                                  style={{
-                                    padding: '8px 16px',
-                                    backgroundColor: '#1a73e8',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer',
-                                    fontSize: '14px',
-                                    fontWeight: '500',
-                                  }}
-                                  onMouseOver={(e) => {
-                                    e.currentTarget.style.backgroundColor = '#1557b0';
-                                  }}
-                                  onMouseOut={(e) => {
-                                    e.currentTarget.style.backgroundColor = '#1a73e8';
-                                  }}
-                                >
-                                  Purchase ${pkg.price_usd.toFixed(2)}
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {(!packagesData.included || packagesData.included.length === 0) &&
-                        (!packagesData.purchased || packagesData.purchased.length === 0) &&
-                        (!packagesData.available || packagesData.available.length === 0) && (
-                          <p className="HelpText" style={{ marginBottom: '20px' }}>
-                            No packages available. The generic package is always included.
-                          </p>
-                        )}
                     </>
+                  ) : packagesData ? (
+                    // User has no owned packages - don't show "Your Packages" section
+                    null
                   ) : (
-                    <p className="HelpText" style={{ marginBottom: '20px' }}>
-                      Unable to load packages. Please check your license key.
-                    </p>
+                    <>
+                      <h2 style={{ marginTop: '40px' }}>Your Packages</h2>
+                      <p className="HelpText" style={{ marginBottom: '20px' }}>
+                        Unable to load packages. Please check your license key.
+                      </p>
+                    </>
                   )}
                 </>
+              )}
+
+              {/* Available Packages Section - Only show when packages are available for purchase */}
+              {licenseStatus.status === 'success' && !packagesLoading && packagesData && packagesData.available && packagesData.available.length > 0 && (
+                <div style={{ marginTop: '40px' }} data-section="available-packages">
+                  <h2 style={{ marginBottom: '12px' }}>Available Packages</h2>
+                  <p className="HelpText" style={{ marginBottom: '12px', fontSize: '13px' }}>
+                    Purchase additional packages to unlock more email types.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {packagesData.available.map((pkg) => (
+                      <div
+                        key={pkg.id}
+                        style={{
+                          padding: '12px',
+                          border: '1px solid #e0e0e0',
+                          borderRadius: '4px',
+                          backgroundColor: '#fff',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <div style={{ flex: 1, marginRight: '16px' }}>
+                          <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize', fontSize: '14px' }}>
+                            {pkg.name}
+                          </div>
+                          <div style={{ fontSize: '13px', color: '#5f6368' }}>{pkg.description}</div>
+                        </div>
+                        <button
+                          onClick={() => handlePackagePurchase(pkg.id, pkg.name)}
+                          style={{
+                            padding: '10px 24px',
+                            fontSize: '14px',
+                            fontWeight: '500',
+                            backgroundColor: '#5567b9',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                            flexShrink: 0,
+                          }}
+                        >
+                          ${pkg.price_usd.toFixed(2)}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -1225,7 +1213,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         </div>
 
         <div style={{ marginTop: '40px', textAlign: 'center' }}>
-          <button className="SaveButton" onClick={handleSave} style={{ padding: '12px 32px', fontSize: '16px' }}>
+          <button className="SaveButton" onClick={handleSave} style={{ padding: '10px 24px', fontSize: '14px', fontWeight: '500', backgroundColor: '#5567b9', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
             {saved ? '✓ Saved!' : 'Save All Settings'}
           </button>
         </div>

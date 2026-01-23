@@ -167,8 +167,8 @@ var options = {
     new CopyWebpackPlugin({
       patterns: [
         {
-          from: 'src/assets/img/icon-128.png',
-          to: path.join(__dirname, 'build'),
+          from: 'src/assets/img/xrepl128mute.png',
+          to: path.join(__dirname, 'build', 'icon-128.png'),
           force: true,
         },
       ],
@@ -176,16 +176,7 @@ var options = {
     new CopyWebpackPlugin({
       patterns: [
         {
-          from: 'src/assets/img/icon-34.png',
-          to: path.join(__dirname, 'build'),
-          force: true,
-        },
-      ],
-    }),
-    new CopyWebpackPlugin({
-      patterns: [
-        {
-          from: 'src/assets/img/xrepl256mute.png',
+          from: 'src/assets/img/xrepl128mute.png',
           to: path.join(__dirname, 'build', 'raicon.png'),
           force: true,
         },
@@ -194,7 +185,7 @@ var options = {
     new CopyWebpackPlugin({
       patterns: [
         {
-          from: 'src/assets/img/xrepl256blue.png',
+          from: 'src/assets/img/xrepl48blue.png',
           to: path.join(__dirname, 'build', 'xrepl-dark.png'),
           force: true,
         },
@@ -203,17 +194,8 @@ var options = {
     new CopyWebpackPlugin({
       patterns: [
         {
-          from: 'src/assets/img/xrepl256light.png',
+          from: 'src/assets/img/xrepl96light.png',
           to: path.join(__dirname, 'build', 'xrepl-light.png'),
-          force: true,
-        },
-      ],
-    }),
-    new CopyWebpackPlugin({
-      patterns: [
-        {
-          from: 'src/assets/img/RAIcon_outline.png',
-          to: path.join(__dirname, 'build', 'raiconvector.png'),
           force: true,
         },
       ],

@@ -1,0 +1,29 @@
+﻿# Exclude node_modules (thousands of files - major performance impact)
+node_modules/
+
+# Exclude documentation from semantic search
+*.md
+!README.md
+
+# Build outputs
+build/
+dist/
+*.bundle.js
+
+# Dependencies
+package-lock.json
+
+# Environment files
+.env*
+secrets.*.js
+
+# Logs
+*.log
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
