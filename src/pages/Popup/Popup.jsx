@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import './Popup.css';
+import UsageDisplay from '../../components/UsageDisplay';
 
 // Cross-browser API compatibility
 const getBrowser = () => {
@@ -17,6 +18,7 @@ const Popup = () => {
   const [apiModel, setApiModel] = useState('');
   const [iconUrl, setIconUrl] = useState('');
   const [metrics, setMetrics] = useState(null);
+  const [licenseKey, setLicenseKey] = useState('');
 
   useEffect(() => {
     const browserAPI = getBrowser();
@@ -24,9 +26,10 @@ const Popup = () => {
 
     // Load current settings
     if (browserAPI.storage) {
-      browserAPI.storage.sync.get(['apiProvider', 'apiModel'], (result) => {
+      browserAPI.storage.sync.get(['apiProvider', 'apiModel', 'licenseKey'], (result) => {
         setApiProvider(result.apiProvider || 'grok');
         setApiModel(result.apiModel || 'grok-4-latest');
+        setLicenseKey(result.licenseKey || '');
       });
     }
 
@@ -137,6 +140,11 @@ const Popup = () => {
             <p>Provider: <span className="setting-value">{apiProvider.toUpperCase()}</span></p>
             <p>Model: <span className="setting-value">{apiModel}</span></p>
           </div>
+        )}
+
+        {/* Usage Tracking Section */}
+        {licenseKey && licenseKey.trim().length > 0 && (
+          <UsageDisplay licenseKey={licenseKey} showUpgradeRecommendation={true} compact={false} />
         )}
 
         {metrics && (

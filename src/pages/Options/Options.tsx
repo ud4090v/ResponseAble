@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import './Options.css';
 import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
+import UsageDisplay from '../../components/UsageDisplay';
 
 interface Props {
   title: string;
@@ -89,6 +90,8 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     all_active: string[];
   } | null>(null);
   const [packagesLoading, setPackagesLoading] = useState<boolean>(false);
+  const [overageEnabled, setOverageEnabled] = useState<boolean>(true);
+  const [overageLoading, setOverageLoading] = useState<boolean>(false);
 
   useEffect(() => {
     // Get icon URL
@@ -157,6 +160,8 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         setLicenseKey(result.licenseKey);
         // Validate license on load (this will also fetch packages)
         validateLicenseKey(result.licenseKey, false);
+        // Fetch overage setting
+        fetchOverageSetting();
       }
       // Note: No license key always means Free plan - no need for defensive check
     });
@@ -330,6 +335,8 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         if (saveOnSuccess) {
           // Fetch packages first (they determine what's available)
           await fetchPackages(key.trim());
+          // Fetch overage setting
+          await fetchOverageSetting();
           
           // Then update plan and adjust settings based on plan limits
           chrome.storage.sync.set({
@@ -370,6 +377,73 @@ const Options: React.FC<Props> = ({ title }: Props) => {
    */
   const handleActivateLicense = () => {
     validateLicenseKey(licenseKey, true);
+  };
+
+  /**
+   * Fetch current overage setting from usage API
+   */
+  const fetchOverageSetting = async () => {
+    if (!licenseKey || licenseKey.trim().length === 0) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${VERCEL_PROXY_URL}/usage`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ licenseKey }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.valid && data.overage) {
+          setOverageEnabled(data.overage.enabled);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching overage setting:', error);
+    }
+  };
+
+  /**
+   * Update overage enabled setting
+   */
+  const updateOverageSetting = async (enabled: boolean) => {
+    if (!licenseKey || licenseKey.trim().length === 0) {
+      alert('Please activate your license key first.');
+      return;
+    }
+
+    setOverageLoading(true);
+    try {
+      const response = await fetch(`${VERCEL_PROXY_URL}/update-overage`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          licenseKey: licenseKey.trim(),
+          overageEnabled: enabled,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setOverageEnabled(data.overage_enabled);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      } else {
+        const error = await response.json();
+        alert(`Failed to update overage setting: ${error.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error updating overage setting:', error);
+      alert('Failed to update overage setting. Please try again.');
+    } finally {
+      setOverageLoading(false);
+    }
   };
 
   /**
@@ -1022,6 +1096,50 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                     >
                       Upgrade Plan
                     </button>
+                  </div>
+                  
+                  {/* Usage Display */}
+                  <UsageDisplay licenseKey={licenseKey} showUpgradeRecommendation={true} compact={false} />
+                  
+                  {/* Overage Toggle */}
+                  <div className="SettingGroup" style={{ marginTop: '24px' }}>
+                    <label style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '12px',
+                      cursor: 'pointer',
+                      padding: '12px',
+                      border: '1px solid #e0e0e0',
+                      borderRadius: '4px',
+                      backgroundColor: '#fff',
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={overageEnabled}
+                        onChange={(e) => updateOverageSetting(e.target.checked)}
+                        disabled={overageLoading}
+                        style={{
+                          width: '18px',
+                          height: '18px',
+                          cursor: overageLoading ? 'not-allowed' : 'pointer',
+                        }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: '500', marginBottom: '4px' }}>
+                          Enable Overage Billing
+                        </div>
+                        <p className="HelpText" style={{ margin: 0, fontSize: '12px', color: '#5f6368' }}>
+                          {overageEnabled 
+                            ? 'When enabled, you can exceed your monthly quota. Extra generations will be charged at your plan\'s overage rate at the end of the billing cycle.'
+                            : 'When disabled, generation will be blocked once you reach your monthly quota. Enable to allow overages with automatic billing.'}
+                        </p>
+                      </div>
+                    </label>
+                    {overageLoading && (
+                      <p className="HelpText" style={{ marginTop: '8px', fontSize: '12px', color: '#5f6368' }}>
+                        Updating...
+                      </p>
+                    )}
                   </div>
                 </div>
               ) : (
