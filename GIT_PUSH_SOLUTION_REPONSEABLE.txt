@@ -1,0 +1,188 @@
+================================================================================
+GITHUB PUSH ERROR - REPONSEABLE REPOSITORY
+================================================================================
+
+ERROR: push declined due to repository rule violations
+
+Repository: ResponseAble (Chrome Extension)
+Branch: main
+Status: 2 commits ahead of origin/main
+
+================================================================================
+PROBLEM ANALYSIS
+================================================================================
+
+You're trying to push directly to 'main' branch, but GitHub has repository
+rules that prevent direct pushes. This is a security best practice.
+
+Current Situation:
+- Repository: ResponseAble (https://github.com/ud4090v/ResponseAble.git)
+- Branch: main
+- Commits ahead: 2
+- Files changed: Multiple (including zip files, images, components)
+
+Potential Issues:
+1. Branch protection rules on main
+2. Large files (zip files detected: ResponseAble-12292025.zip, ResponseAble_123025.zip)
+3. Required pull request reviews
+4. Required status checks
+
+================================================================================
+SOLUTIONS
+================================================================================
+
+OPTION 1: Create a Feature Branch and Pull Request (RECOMMENDED)
+-----------------------------------------------------------------
+This is the safest and most professional approach:
+
+1. Create a new branch from your current commits:
+   git checkout -b feature/usage-tracking-enhancements
+
+2. Push the new branch:
+   git push origin feature/usage-tracking-enhancements
+
+3. Create Pull Request on GitHub:
+   - Go to: https://github.com/ud4090v/ResponseAble
+   - Click "New Pull Request"
+   - From: feature/usage-tracking-enhancements
+   - To: main
+   - Add description
+   - Create PR
+
+4. After PR is merged, update local main:
+   git checkout main
+   git pull origin main
+
+OPTION 2: Remove Large Files (If Causing Issues)
+-------------------------------------------------
+If zip files are causing problems:
+
+1. Remove zip files from tracking:
+   git rm --cached ResponseAble-12292025.zip
+   git rm --cached ResponseAble_123025.zip
+
+2. Add to .gitignore:
+   echo "*.zip" >> .gitignore
+
+3. Commit the changes:
+   git add .gitignore
+   git commit -m "Remove zip files and add to gitignore"
+
+4. Push to feature branch:
+   git checkout -b feature/remove-zip-files
+   git push origin feature/remove-zip-files
+
+OPTION 3: Check Repository Settings
+------------------------------------
+If you're the repository owner:
+
+1. Go to: https://github.com/ud4090v/ResponseAble/settings
+2. Navigate to: Rules → Rulesets
+3. Check branch protection rules for 'main'
+4. Common rules that block pushes:
+   - Require pull request reviews before merging
+   - Require status checks to pass
+   - Require branches to be up to date
+   - Restrict who can push to matching branches
+
+5. Options:
+   - Temporarily disable protection (not recommended)
+   - Add yourself as exception (if you're owner)
+   - Use Pull Request workflow (recommended)
+
+OPTION 4: Force Push (NOT RECOMMENDED - Use Only If You're Sure)
+-----------------------------------------------------------------
+⚠️  WARNING: Only use if you understand the risks!
+
+If you're the only one working on this and you're certain:
+   git push origin main --force
+
+This bypasses protection but can cause issues if others are working on the repo.
+
+================================================================================
+RECOMMENDED WORKFLOW
+================================================================================
+
+1. Create feature branch:
+   git checkout -b feature/your-feature-name
+
+2. Make your changes and commit:
+   git add .
+   git commit -m "Your commit message"
+   git push origin feature/your-feature-name
+
+3. Create Pull Request on GitHub:
+   - Review changes
+   - Get approvals if required
+   - Merge when ready
+
+4. Keep main clean:
+   git checkout main
+   git pull origin main
+   git branch -d feature/your-feature-name  # Delete local branch after merge
+
+================================================================================
+CURRENT COMMITS TO PUSH
+================================================================================
+
+Your 2 commits ahead of origin/main:
+
+1. feat: enhance usage tracking and overage settings management
+   - Improved UsageDisplay component
+   - Refined state management for overage billing
+   - Added API functionality for overage settings
+
+2. (Previous commit - check with: git log --oneline -3)
+
+To see full details:
+  git log origin/main..HEAD
+
+================================================================================
+QUICK FIX - CREATE FEATURE BRANCH
+================================================================================
+
+Run these commands:
+
+  # Create branch from current state
+  git checkout -b feature/usage-tracking-updates
+  
+  # Push to new branch
+  git push origin feature/usage-tracking-updates
+  
+  # Then create PR on GitHub from feature/usage-tracking-updates to main
+
+================================================================================
+CHECKING FOR PROBLEMATIC FILES
+================================================================================
+
+Large files detected:
+- ResponseAble-12292025.zip
+- ResponseAble_123025.zip
+
+Consider:
+1. Removing these from git (if not needed)
+2. Adding *.zip to .gitignore
+3. Using Git LFS for large files if they must be tracked
+
+Check file sizes:
+  git ls-files | ForEach-Object { 
+    $file = Join-Path "c:\VScode\reponseable" $_; 
+    if (Test-Path $file) { 
+      Get-Item $file | Select-Object Name, @{Name="SizeMB";Expression={[math]::Round($_.Length/1MB, 2)}} 
+    } 
+  } | Where-Object { $_.SizeMB -gt 1 } | Sort-Object SizeMB -Descending
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. ✅ Understand the issue: Branch protection on main
+2. ⏳ Create feature branch from your commits
+3. ⏳ Push feature branch to GitHub
+4. ⏳ Create Pull Request
+5. ⏳ Review and merge PR
+6. ⏳ Update local main branch
+
+================================================================================
+END OF GUIDE
+================================================================================
