@@ -842,7 +842,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
             className={`Tab ${activeTab === 'packages' ? 'TabActive' : ''}`}
             onClick={() => setActiveTab('packages')}
           >
-            Packages
+            Subscription
           </button>
           {showDefaultRoleTab && (
             <button

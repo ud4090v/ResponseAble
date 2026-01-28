@@ -2746,6 +2746,21 @@ const injectGenerateButton = () => {
 
         generateButton.addEventListener('click', async () => {
             const currentButtonText = 'xReplAI';
+            // Early check: if no license key, show register popup and do not call APIs
+            const licenseKey = await new Promise((resolve) => {
+                const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
+                if (!storage) {
+                    resolve(null);
+                    return;
+                }
+                storage.sync.get(['licenseKey'], (result) => {
+                    resolve(result.licenseKey || null);
+                });
+            });
+            if (!licenseKey || !String(licenseKey).trim()) {
+                showLicenseRequiredPopup();
+                return;
+            }
             // Get context for API call using enhanced context extraction
             const richContext = getRichContext();
 
@@ -3246,7 +3261,11 @@ const injectGenerateButton = () => {
                 } catch (err) {
                     // Remove progress overlay on error
                     document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
-                    alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
+                    if (isLicenseError(err)) {
+                        showLicenseRequiredPopup();
+                    } else {
+                        alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
+                    }
                 } finally {
                     updateButtonText(generateButton, currentButtonText);
                     generateButton.style.opacity = '1';
@@ -3322,7 +3341,11 @@ const injectGenerateButton = () => {
             } catch (err) {
                 // Remove progress overlay on error
                 document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
-                alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
+                if (isLicenseError(err)) {
+                    showLicenseRequiredPopup();
+                } else {
+                    alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
+                }
             } finally {
                 // Remove progress overlay if still present
                 document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
@@ -3881,6 +3904,75 @@ Email body: ${composeBodyText || '(not provided)'}`
         console.error('Error generating drafts for new email:', error);
         throw error;
     }
+};
+
+const REGISTER_URL = 'https://xrepl.ai/pricing';
+
+/**
+ * Returns true if the error is due to missing/invalid license (403 or license message).
+ */
+const isLicenseError = (err) => {
+    if (!err) return false;
+    const msg = (err.message || err.toString() || '').toLowerCase();
+    return (
+        msg.includes('license key required') ||
+        msg.includes('subscribe to a plan') ||
+        msg.includes('http 403') ||
+        msg.includes('403:')
+    );
+};
+
+/**
+ * Show a modal prompting the user to register for a free license.
+ */
+const showLicenseRequiredPopup = () => {
+    document.querySelector('.responseable-overlay.responseable-license-popup')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'responseable-overlay responseable-license-popup';
+    overlay.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 90%;
+        max-width: 420px;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+        z-index: 2147483647;
+        padding: 24px;
+        font-family: Google Sans, Roboto, sans-serif;
+        text-align: center;
+    `;
+    overlay.innerHTML = `
+        <p style="margin: 0 0 20px; font-size: 16px; color: #202124;">Get a free license to use xRepl.ai and generate smart replies.</p>
+        <a href="${REGISTER_URL}" target="_blank" rel="noopener" id="responseable-license-register-btn" style="
+            display: inline-block;
+            padding: 10px 20px;
+            background: #1a73e8;
+            color: white;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+            margin-bottom: 12px;
+        ">Register for free</a>
+        <br>
+        <button type="button" id="responseable-license-close-btn" style="
+            padding: 8px 16px;
+            background: transparent;
+            border: 1px solid #dadce0;
+            border-radius: 8px;
+            color: #5f6368;
+            cursor: pointer;
+            font-size: 14px;
+        ">Close</button>
+    `;
+    overlay.addEventListener('click', (e) => {
+        if (e.target.id === 'responseable-license-close-btn') {
+            overlay.remove();
+        }
+    });
+    document.body.appendChild(overlay);
 };
 
 /**
@@ -4836,7 +4928,12 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                     );
                 } catch (err) {
                     console.error('Error generating drafts for goal:', err);
-                    loadingIndicator.innerHTML = 'Error generating drafts. Please try again.';
+                    if (isLicenseError(err)) {
+                        document.querySelector('.responseable-overlay')?.remove();
+                        showLicenseRequiredPopup();
+                    } else {
+                        loadingIndicator.innerHTML = 'Error generating drafts. Please try again.';
+                    }
                 }
             });
         });
@@ -5258,7 +5355,11 @@ const createCommentButtonHandler = (editor) => {
         } catch (err) {
             // Remove streaming overlay on error
             document.querySelector('.responseable-overlay.responseable-streaming')?.remove();
-            alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
+            if (isLicenseError(err)) {
+                showLicenseRequiredPopup();
+            } else {
+                alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
+            }
             // Restore button
             commentButton.innerHTML = '';
             commentButton.style.opacity = '1';
