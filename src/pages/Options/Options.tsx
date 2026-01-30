@@ -520,6 +520,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     setLicenseKey('');
     setSubscriptionPlan('free');
     setSelectedPackages(['generic']); // Free plan only has generic package
+    setLicenseStatus({ status: 'idle', message: '' });
     chrome.storage.sync.set({ 
       licenseKey: '',
       subscriptionPlan: 'free',
@@ -670,6 +671,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         selectedPackages: packagesToSave,
         defaultRole: validatedDefaultRole,
         subscriptionPlan: subscriptionPlan,
+        licenseKey: licenseKey.trim(),
       },
       () => {
         setSaved(true);
