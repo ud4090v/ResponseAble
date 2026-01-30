@@ -80,23 +80,32 @@
 }
 
 .SaveButton {
-  background: #1a73e8;
+  display: inline-block;
+  background: #5567b9;
   color: white;
   border: none;
-  padding: 12px 24px;
+  padding: 10px 24px;
   border-radius: 4px;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
   transition: background-color 0.2s;
+  box-sizing: border-box;
 }
 
 .SaveButton:hover {
-  background: #1557b0;
+  background: #4556a8;
 }
 
 .SaveButton:active {
-  background: #1348a0;
+  background: #3d4a96;
+}
+
+.SaveButton:disabled {
+  background: #dadce0;
+  cursor: not-allowed;
 }
 
 .TabsContainer {

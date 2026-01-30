@@ -750,38 +750,16 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                   href="https://xrepl.ai/pricing"
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{
-                    padding: '10px 24px',
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    backgroundColor: '#5567b9',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                    textDecoration: 'none',
-                    display: 'inline-block',
-                    lineHeight: 1.4,
-                  }}
+                  className="SaveButton"
                 >
                   Get Access
                 </a>
               ) : (
                 <button
+                  type="button"
+                  className="SaveButton"
                   onClick={handleActivateLicense}
                   disabled={licenseStatus.status === 'loading'}
-                  style={{
-                    padding: '10px 24px',
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    backgroundColor: licenseStatus.status === 'loading' ? '#dadce0' : '#5567b9',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: licenseStatus.status === 'loading' ? 'not-allowed' : 'pointer',
-                    whiteSpace: 'nowrap',
-                  }}
                 >
                   {licenseStatus.status === 'loading' ? (
                     <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1354,7 +1332,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         </div>
 
         <div style={{ marginTop: '40px', textAlign: 'center' }}>
-          <button className="SaveButton" onClick={handleSave} style={{ padding: '10px 24px', fontSize: '14px', fontWeight: '500', backgroundColor: '#5567b9', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <button type="button" className="SaveButton" onClick={handleSave}>
             {saved ? '✓ Saved!' : 'Save All Settings'}
           </button>
         </div>
