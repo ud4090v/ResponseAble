@@ -720,18 +720,6 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           <p className="HelpText" style={{ marginBottom: '16px', fontStyle: 'normal' }}>
             Enter your license key to activate your subscription. Your license key was sent to your email after purchase.
           </p>
-          {(!licenseKey || !licenseKey.trim()) && (
-            <p className="HelpText" style={{ marginBottom: '16px', fontStyle: 'normal' }}>
-              <a
-                href="https://xrepl.ai/pricing"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ color: '#5567b9', fontWeight: '600', textDecoration: 'underline' }}
-              >
-                Get Free access
-              </a>
-            </p>
-          )}
           <div className="SettingGroup">
             <label htmlFor="license-key" style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>
               License Key:
@@ -752,35 +740,59 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                   fontFamily: 'monospace',
                 }}
                 onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === 'Enter' && licenseKey.trim()) {
                     handleActivateLicense();
                   }
                 }}
               />
-              <button
-                onClick={handleActivateLicense}
-                disabled={licenseStatus.status === 'loading' || !licenseKey.trim()}
-                style={{
-                  padding: '10px 24px',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  backgroundColor: licenseStatus.status === 'loading' || !licenseKey.trim() ? '#dadce0' : '#5567b9',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: licenseStatus.status === 'loading' || !licenseKey.trim() ? 'not-allowed' : 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {licenseStatus.status === 'loading' ? (
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ display: 'inline-block', width: '14px', height: '14px', border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}></span>
-                    Validating...
-                  </span>
-                ) : (
-                  'Activate'
-                )}
-              </button>
+              {(!licenseKey || !licenseKey.trim()) ? (
+                <a
+                  href="https://xrepl.ai/pricing"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    padding: '10px 24px',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    backgroundColor: '#5567b9',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    textDecoration: 'none',
+                    display: 'inline-block',
+                    lineHeight: 1.4,
+                  }}
+                >
+                  Get Access
+                </a>
+              ) : (
+                <button
+                  onClick={handleActivateLicense}
+                  disabled={licenseStatus.status === 'loading'}
+                  style={{
+                    padding: '10px 24px',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    backgroundColor: licenseStatus.status === 'loading' ? '#dadce0' : '#5567b9',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: licenseStatus.status === 'loading' ? 'not-allowed' : 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {licenseStatus.status === 'loading' ? (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ display: 'inline-block', width: '14px', height: '14px', border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}></span>
+                      Validating...
+                    </span>
+                  ) : (
+                    'Activate'
+                  )}
+                </button>
+              )}
             </div>
             
             {/* Status Display */}
