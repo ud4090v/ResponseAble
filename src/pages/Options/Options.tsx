@@ -720,7 +720,18 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           <p className="HelpText" style={{ marginBottom: '16px', fontStyle: 'normal' }}>
             Enter your license key to activate your subscription. Your license key was sent to your email after purchase.
           </p>
-          
+          {(!licenseKey || !licenseKey.trim()) && (
+            <p className="HelpText" style={{ marginBottom: '16px', fontStyle: 'normal' }}>
+              <a
+                href="https://xrepl.ai/pricing"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: '#5567b9', fontWeight: '600', textDecoration: 'underline' }}
+              >
+                Get Free access
+              </a>
+            </p>
+          )}
           <div className="SettingGroup">
             <label htmlFor="license-key" style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>
               License Key:
