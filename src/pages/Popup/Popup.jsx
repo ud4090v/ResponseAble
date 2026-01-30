@@ -159,6 +159,12 @@ const Popup = () => {
 
   const hasPackages = usageData?.plan && PLANS_WITH_PACKAGES.includes(usageData.plan);
 
+  const hasLicense = licenseKey && licenseKey.trim().length > 0;
+
+  const openPricing = () => {
+    window.open('https://xrepl.ai/pricing', '_blank');
+  };
+
   return (
     <div className="popup-container">
       <div className="popup-header">
@@ -172,6 +178,22 @@ const Popup = () => {
       </div>
 
       <div className="popup-content">
+        {!hasLicense ? (
+          <>
+            <div className="popup-info">
+              <p>Enter your license key in Settings to use xReplAI, or get access below.</p>
+            </div>
+            <div className="popup-buttons" style={{ flexDirection: 'column', marginTop: '12px' }}>
+              <button type="button" className="popup-button" onClick={openPricing} style={{ width: '100%' }}>
+                Get Access
+              </button>
+              <button type="button" className="popup-button popup-button-secondary" onClick={openOptions}>
+                Open Settings
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
         <div className="popup-info">
           <p>Use the <strong>xReplAI</strong> button in Gmail or LinkedIn to create AI-powered email drafts.</p>
         </div>
@@ -199,22 +221,18 @@ const Popup = () => {
               <p className="popup-setting-row">
                 <strong>Plan:</strong>{' '}
                 <span className="setting-value">
-                  {usageData ? planDisplayName(usageData.plan) : (licenseKey && licenseKey.trim() ? 'Loading…' : '—')}
+                  {usageData ? planDisplayName(usageData.plan) : 'Loading…'}
                 </span>
               </p>
               <p className="popup-setting-row">
                 <strong>Packages:</strong>{' '}
                 <span className="setting-value">
-                  {usageData
-                    ? (hasPackages ? 'Included with plan' : '—')
-                    : (licenseKey && licenseKey.trim() ? 'Loading…' : '—')}
+                  {usageData ? (hasPackages ? 'Included with plan' : '—') : 'Loading…'}
                 </span>
               </p>
             </div>
 
-            {licenseKey && licenseKey.trim().length > 0 && (
-              <UsageDisplay licenseKey={licenseKey} showUpgradeRecommendation={true} compact={false} />
-            )}
+            <UsageDisplay licenseKey={licenseKey} showUpgradeRecommendation={true} compact={false} />
 
             {usageData && usageData.overage && usageData.generations && usageData.generations.used >= usageData.generations.included && usageData.overage.used > 0 && (
               <div className="popup-overage-due">
@@ -252,15 +270,15 @@ const Popup = () => {
         )}
 
         <div className="popup-buttons">
-          {licenseKey && licenseKey.trim().length > 0 && (
-            <button type="button" className="popup-button popup-button-secondary" onClick={openAccount}>
-              My Account
-            </button>
-          )}
+          <button type="button" className="popup-button popup-button-secondary" onClick={openAccount}>
+            My Account
+          </button>
           <button type="button" className="popup-button" onClick={openOptions}>
             Open Settings
           </button>
         </div>
+          </>
+        )}
       </div>
     </div>
   );
