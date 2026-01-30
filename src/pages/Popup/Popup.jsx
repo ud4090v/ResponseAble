@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import './Popup.css';
 import UsageDisplay from '../../components/UsageDisplay';
+import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
 
 // Cross-browser API compatibility
 const getBrowser = () => {
@@ -13,18 +14,22 @@ const getBrowser = () => {
   return null;
 };
 
+// Plans that include content packages (add-ons)
+const PLANS_WITH_PACKAGES = ['pro', 'ultimate', 'pro_plus', 'basic'];
+
 const Popup = () => {
   const [apiProvider, setApiProvider] = useState('');
   const [apiModel, setApiModel] = useState('');
   const [iconUrl, setIconUrl] = useState('');
   const [metrics, setMetrics] = useState(null);
   const [licenseKey, setLicenseKey] = useState('');
+  const [activeTab, setActiveTab] = useState('settings');
+  const [usageData, setUsageData] = useState(null);
 
   useEffect(() => {
     const browserAPI = getBrowser();
     if (!browserAPI) return;
 
-    // Load current settings
     if (browserAPI.storage) {
       browserAPI.storage.sync.get(['apiProvider', 'apiModel', 'licenseKey'], (result) => {
         setApiProvider(result.apiProvider || 'grok');
@@ -33,7 +38,6 @@ const Popup = () => {
       });
     }
 
-    // Get icon URL
     if (browserAPI.runtime) {
       try {
         const url = browserAPI.runtime.getURL('xrepl-light.png');
@@ -43,7 +47,6 @@ const Popup = () => {
       }
     }
 
-    // Load metrics
     if (browserAPI.storage) {
       browserAPI.storage.local.get(['metrics'], (result) => {
         const metrics = result.metrics || {
@@ -56,7 +59,6 @@ const Popup = () => {
           draftsThisMonth: 0
         };
 
-        // Calculate formatted metrics
         const insertRate = metrics.draftsGenerated > 0
           ? Math.round((metrics.draftsInserted / metrics.draftsGenerated) * 100)
           : 0;
@@ -109,6 +111,31 @@ const Popup = () => {
     }
   }, []);
 
+  // Fetch usage for Settings tab (plan, packages, usage summary)
+  useEffect(() => {
+    if (!licenseKey || licenseKey.trim().length === 0) {
+      setUsageData(null);
+      return;
+    }
+    const fetchUsage = async () => {
+      try {
+        const response = await fetch(`${VERCEL_PROXY_URL}/usage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ licenseKey }),
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        setUsageData(data.valid ? data : null);
+      } catch (err) {
+        setUsageData(null);
+      }
+    };
+    fetchUsage();
+    const interval = setInterval(fetchUsage, 30000);
+    return () => clearInterval(interval);
+  }, [licenseKey]);
+
   const openOptions = () => {
     const browserAPI = getBrowser();
     if (browserAPI && browserAPI.runtime) {
@@ -116,6 +143,21 @@ const Popup = () => {
       window.close();
     }
   };
+
+  const openAccount = () => {
+    const url = licenseKey && licenseKey.trim()
+      ? `https://xrepl.ai/account?license=${encodeURIComponent(licenseKey.trim())}`
+      : 'https://xrepl.ai/account';
+    window.open(url, '_blank');
+  };
+
+  const planDisplayName = (plan) => {
+    if (!plan) return '—';
+    if (plan === 'pro_plus') return 'Pro+';
+    return plan.charAt(0).toUpperCase() + plan.slice(1);
+  };
+
+  const hasPackages = usageData?.plan && PLANS_WITH_PACKAGES.includes(usageData.plan);
 
   return (
     <div className="popup-container">
@@ -134,54 +176,91 @@ const Popup = () => {
           <p>Use the <strong>xReplAI</strong> button in Gmail or LinkedIn to create AI-powered email drafts.</p>
         </div>
 
-        {apiProvider && apiModel && (
-          <div className="popup-settings">
-            <p><strong>Current Settings:</strong></p>
-            <p>Provider: <span className="setting-value">{apiProvider.toUpperCase()}</span></p>
-            <p>Model: <span className="setting-value">{apiModel}</span></p>
+        <div className="popup-tabs">
+          <button
+            type="button"
+            className={`popup-tab ${activeTab === 'settings' ? 'popup-tab-active' : ''}`}
+            onClick={() => setActiveTab('settings')}
+          >
+            Settings
+          </button>
+          <button
+            type="button"
+            className={`popup-tab ${activeTab === 'statistics' ? 'popup-tab-active' : ''}`}
+            onClick={() => setActiveTab('statistics')}
+          >
+            Statistics
+          </button>
+        </div>
+
+        {activeTab === 'settings' && (
+          <div className="popup-tab-panel">
+            <div className="popup-settings-section">
+              <p className="popup-setting-row">
+                <strong>Plan:</strong>{' '}
+                <span className="setting-value">
+                  {usageData ? planDisplayName(usageData.plan) : (licenseKey && licenseKey.trim() ? 'Loading…' : '—')}
+                </span>
+              </p>
+              <p className="popup-setting-row">
+                <strong>Packages:</strong>{' '}
+                <span className="setting-value">
+                  {usageData
+                    ? (hasPackages ? 'Included with plan' : '—')
+                    : (licenseKey && licenseKey.trim() ? 'Loading…' : '—')}
+                </span>
+              </p>
+            </div>
+
+            {licenseKey && licenseKey.trim().length > 0 && (
+              <UsageDisplay licenseKey={licenseKey} showUpgradeRecommendation={true} compact={false} />
+            )}
+
+            {usageData && usageData.overage && usageData.generations && usageData.generations.used >= usageData.generations.included && usageData.overage.used > 0 && (
+              <div className="popup-overage-due">
+                <p><strong>Bonus generations used:</strong> {usageData.overage.used.toLocaleString()}</p>
+                <p><strong>Current amount due:</strong> ${(usageData.overage.cost || 0).toFixed(2)} <span className="popup-overage-note">(at ${(usageData.overage.rate || 0).toFixed(2)}/gen)</span></p>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Usage Tracking Section */}
-        {licenseKey && licenseKey.trim().length > 0 && (
-          <UsageDisplay licenseKey={licenseKey} showUpgradeRecommendation={true} compact={false} />
-        )}
-
-        {metrics && (
-          <div className="popup-metrics" style={{ marginTop: '20px', padding: '16px', background: '#f8f9fa', borderRadius: '8px', fontSize: '13px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <p style={{ margin: 0, color: '#5f6368' }}>
-                <strong style={{ color: '#202124' }}>Total Drafts Generated:</strong> {metrics.draftsGenerated.toLocaleString()}
-              </p>
-              <p style={{ margin: 0, color: '#5f6368' }}>
-                <strong style={{ color: '#202124' }}>Drafts Inserted:</strong> {metrics.draftsInserted.toLocaleString()}
-              </p>
-              <p style={{ margin: 0, color: '#5f6368' }}>
-                <strong style={{ color: '#202124' }}>Insert Rate:</strong> {metrics.insertRate}%
-              </p>
-              <p style={{ margin: 0, color: '#5f6368' }}>
-                <strong style={{ color: '#202124' }}>Time Saved:</strong> {metrics.timeSaved}
-              </p>
-              <p style={{ margin: 0, color: '#5f6368' }}>
-                <strong style={{ color: '#202124' }}>This Week:</strong> {metrics.draftsThisWeek} drafts
-              </p>
+        {activeTab === 'statistics' && metrics && (
+          <div className="popup-tab-panel popup-metrics">
+            <div className="popup-metrics-inner">
+              <p className="popup-metric"><strong>Total Drafts Generated:</strong> {metrics.draftsGenerated.toLocaleString()}</p>
+              <p className="popup-metric"><strong>Drafts Inserted:</strong> {metrics.draftsInserted.toLocaleString()}</p>
+              <p className="popup-metric"><strong>Insert Rate:</strong> {metrics.insertRate}%</p>
+              <p className="popup-metric"><strong>Time Saved:</strong> {metrics.timeSaved}</p>
+              <p className="popup-metric"><strong>This Week:</strong> {metrics.draftsThisWeek} drafts</p>
               {metrics.mostUsedRole && (
-                <p style={{ margin: 0, color: '#5f6368' }}>
-                  <strong style={{ color: '#202124' }}>Top Role:</strong> {metrics.mostUsedRole.charAt(0).toUpperCase() + metrics.mostUsedRole.slice(1)} ({metrics.mostUsedRolePercentage}%)
+                <p className="popup-metric">
+                  <strong>Top Role:</strong> {metrics.mostUsedRole.charAt(0).toUpperCase() + metrics.mostUsedRole.slice(1)} ({metrics.mostUsedRolePercentage}%)
                 </p>
               )}
               {metrics.totalFeedback > 0 && (
-                <p style={{ margin: 0, color: '#5f6368' }}>
-                  <strong style={{ color: '#202124' }}>Feedback Score:</strong> {metrics.feedbackScore}% helpful
-                </p>
+                <p className="popup-metric"><strong>Feedback Score:</strong> {metrics.feedbackScore}% helpful</p>
               )}
             </div>
           </div>
         )}
 
-        <button className="popup-button" onClick={openOptions}>
-          Open Settings
-        </button>
+        {activeTab === 'statistics' && !metrics && (
+          <div className="popup-tab-panel">
+            <p className="popup-muted">No statistics yet. Generate some drafts to see your KPIs here.</p>
+          </div>
+        )}
+
+        <div className="popup-buttons">
+          {licenseKey && licenseKey.trim().length > 0 && (
+            <button type="button" className="popup-button popup-button-secondary" onClick={openAccount}>
+              My Account
+            </button>
+          )}
+          <button type="button" className="popup-button" onClick={openOptions}>
+            Open Settings
+          </button>
+        </div>
       </div>
     </div>
   );

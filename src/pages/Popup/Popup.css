@@ -61,29 +61,130 @@
   color: #202124;
 }
 
-.popup-settings {
-  background: #f8f9fa;
-  padding: 12px;
-  border-radius: 6px;
+.popup-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #e5e7eb;
+  box-sizing: border-box;
+}
+
+.popup-tab {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #5f6368;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+  margin-bottom: -1px;
+  box-sizing: border-box;
+}
+
+.popup-tab:hover {
+  color: #1E3A8A;
+}
+
+.popup-tab-active {
+  color: #1E3A8A;
+  border-bottom-color: #1E3A8A;
+}
+
+.popup-tab-panel {
+  min-height: 60px;
   margin-bottom: 16px;
   box-sizing: border-box;
 }
 
-.popup-settings p {
-  margin: 8px 0;
+.popup-settings-section {
+  background: #f8f9fa;
+  padding: 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+}
+
+.popup-setting-row {
+  margin: 6px 0;
   font-size: 13px;
   color: #5f6368;
 }
 
-.popup-settings p:first-child {
+.popup-setting-row:first-child {
   margin-top: 0;
-  font-weight: 600;
+}
+
+.popup-setting-row strong {
   color: #202124;
 }
 
 .setting-value {
   color: #1E3A8A;
   font-weight: 500;
+}
+
+.popup-overage-due {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #fee2e2;
+  border-radius: 6px;
+  border: 1px solid #fecaca;
+  font-size: 12px;
+  color: #991b1b;
+  box-sizing: border-box;
+}
+
+.popup-overage-due p {
+  margin: 4px 0;
+}
+
+.popup-overage-due p:first-child {
+  margin-top: 0;
+}
+
+.popup-overage-note {
+  font-size: 11px;
+  color: #b91c1c;
+}
+
+.popup-metrics {
+  padding: 0;
+}
+
+.popup-metrics-inner {
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.popup-metric {
+  margin: 0;
+  color: #5f6368;
+}
+
+.popup-metric strong {
+  color: #202124;
+}
+
+.popup-muted {
+  margin: 0;
+  font-size: 13px;
+  color: #6b7280;
+  padding: 12px 0;
+}
+
+.popup-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
 }
 
 .popup-button {
@@ -106,4 +207,14 @@
 
 .popup-button:active {
   background: #1e3a8a;
+}
+
+.popup-button-secondary {
+  background: transparent;
+  color: #1E3A8A;
+  border: 1px solid #1E3A8A;
+}
+
+.popup-button-secondary:hover {
+  background: #eff6ff;
 }
