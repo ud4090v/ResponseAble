@@ -3989,8 +3989,10 @@ const showLicenseRequiredPopup = () => {
 };
 
 /**
- * Validate license key and check/increment usage if needed
- * Returns validation result with plan info
+ * Validate license key before generation (check only; do not increment).
+ * Returns validation result with plan info. Usage is incremented only when the
+ * generation API is called, so we get one usage_tracking row per response with
+ * model_used and endpoint populated.
  */
 const validateLicenseBeforeGeneration = async () => {
     try {
@@ -4006,7 +4008,8 @@ const validateLicenseBeforeGeneration = async () => {
                 }
 
                 try {
-                    // Validate license with increment flag for Basic plan
+                    // Check-only: do not increment here. The generation endpoint (e.g. generate-drafts-reply)
+                    // increments once per request and records model_used/endpoint.
                     const response = await fetch(`${VERCEL_PROXY_URL}/validate`, {
                         method: 'POST',
                         headers: {
@@ -4014,7 +4017,7 @@ const validateLicenseBeforeGeneration = async () => {
                         },
                         body: JSON.stringify({
                             key: licenseKey,
-                            increment: true // Increment usage for Basic plan
+                            increment: false
                         }),
                     });
 
@@ -4054,7 +4057,7 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
     try {
         await loadApiConfig();
 
-        // Validate license before generation (for Basic plan usage tracking)
+        // Check license before generation (usage is counted by the generation API only)
         const licenseValidation = await validateLicenseBeforeGeneration();
 
         // If license invalid and not free tier, show warning but continue
