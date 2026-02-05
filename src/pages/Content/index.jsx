@@ -2922,6 +2922,9 @@ const injectGenerateButton = () => {
                 const iconUrl = getChromeRuntime()?.runtime?.getURL ? getChromeRuntime().runtime.getURL('icon-128.png') : null;
                 showProgressOverlay(iconUrl);
 
+                // Validate license once and cache for this flow (avoids extra /validate before generation)
+                await getCachedOrValidateLicense();
+
                 updateButtonText(generateButton, 'Working...');
                 generateButton.style.opacity = '0.7';
                 generateButton.disabled = true; // Disable button during generation
@@ -3285,6 +3288,9 @@ const injectGenerateButton = () => {
             // Show progress overlay immediately for instant feedback
             const iconUrl = getChromeRuntime()?.runtime?.getURL ? getChromeRuntime().runtime.getURL('icon-128.png') : null;
             showProgressOverlay(iconUrl);
+
+            // Validate license once and cache for this flow (avoids extra /validate before generation)
+            await getCachedOrValidateLicense();
 
             // Update button to show we're working
             updateButtonText(generateButton, 'Working...');
@@ -3988,37 +3994,35 @@ const showLicenseRequiredPopup = () => {
     document.body.appendChild(overlay);
 };
 
+/** Short-term license validation cache (valid for LICENSE_CACHE_TTL_MS). */
+const LICENSE_CACHE_TTL_MS = 120000; // 2 minutes
+let licenseValidationCache = { validation: null, cachedAt: 0 };
+
 /**
- * Validate license key before generation (check only; do not increment).
- * Returns validation result with plan info. Usage is incremented only when the
- * generation API is called, so we get one usage_tracking row per response with
- * model_used and endpoint populated.
+ * Validate license key (check only; do not increment).
+ * Returns validation result with plan info. Usage is incremented only when the generation API is called.
  */
 const validateLicenseBeforeGeneration = async () => {
     try {
-        // Get license key from storage
         return new Promise((resolve) => {
-            chrome.storage.sync.get(['licenseKey'], async (result) => {
+            const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
+            if (!storage?.sync) {
+                resolve({ valid: true, plan: 'free' });
+                return;
+            }
+            storage.sync.get(['licenseKey'], async (result) => {
                 const licenseKey = result.licenseKey;
 
-                // If no license key, allow free tier usage
                 if (!licenseKey) {
                     resolve({ valid: true, plan: 'free' });
                     return;
                 }
 
                 try {
-                    // Check-only: do not increment here. The generation endpoint (e.g. generate-drafts-reply)
-                    // increments once per request and records model_used/endpoint.
                     const response = await fetch(`${VERCEL_PROXY_URL}/validate`, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            key: licenseKey,
-                            increment: false
-                        }),
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: licenseKey, increment: false }),
                     });
 
                     const data = await response.json();
@@ -4031,7 +4035,6 @@ const validateLicenseBeforeGeneration = async () => {
                             generations_remaining: data.generations_remaining,
                         });
                     } else {
-                        // License invalid - show error but don't block (graceful degradation)
                         console.warn('License validation failed:', data.error);
                         resolve({
                             valid: false,
@@ -4041,24 +4044,36 @@ const validateLicenseBeforeGeneration = async () => {
                     }
                 } catch (error) {
                     console.error('License validation error:', error);
-                    // On error, allow free tier (graceful degradation)
                     resolve({ valid: true, plan: 'free' });
                 }
             });
         });
     } catch (error) {
         console.error('License validation error:', error);
-        // On error, allow free tier
         return { valid: true, plan: 'free' };
     }
+};
+
+/**
+ * Validate license once and cache result for LICENSE_CACHE_TTL_MS.
+ * Call at flow start (when user clicks xReplai); generateDraftsWithTone uses this so we only hit /validate once per flow.
+ */
+const getCachedOrValidateLicense = async () => {
+    const now = Date.now();
+    if (licenseValidationCache.validation && (now - licenseValidationCache.cachedAt) < LICENSE_CACHE_TTL_MS) {
+        return licenseValidationCache.validation;
+    }
+    const validation = await validateLicenseBeforeGeneration();
+    licenseValidationCache = { validation, cachedAt: now };
+    return validation;
 };
 
 const generateDraftsWithTone = async (richContext, sourceMessageText, platform, classification, selectedTone, senderName, recipientName, recipientCompany, adapter, onComplete, regenerateContext = null) => {
     try {
         await loadApiConfig();
 
-        // Check license before generation (usage is counted by the generation API only)
-        const licenseValidation = await validateLicenseBeforeGeneration();
+        // Use cached validation if fresh (validated once at flow start); otherwise validate now
+        const licenseValidation = await getCachedOrValidateLicense();
 
         // If license invalid and not free tier, show warning but continue
         if (!licenseValidation.valid && licenseValidation.plan !== 'free') {
