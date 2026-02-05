@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { VERCEL_PROXY_URL } from '../config/apiKeys.js';
+import './UsageDisplay.css';
 
 interface UsageData {
   valid: boolean;
@@ -61,20 +62,21 @@ const UsageDisplay: React.FC<UsageDisplayProps> = ({
       return;
     }
 
-    fetchUsage();
-    // Refresh every 30 seconds
-    const interval = setInterval(fetchUsage, 30000);
+    fetchUsage(true);
+    // Refresh every 30 seconds (no loading state)
+    const interval = setInterval(() => fetchUsage(false), 30000);
     return () => clearInterval(interval);
   }, [licenseKey]);
 
-  const fetchUsage = async () => {
+  const fetchUsage = async (isInitialLoad = false) => {
     if (!licenseKey || licenseKey.trim().length === 0) {
       setLoading(false);
       return;
     }
 
     try {
-      setLoading(true);
+      /* Only show loading on initial load; background refresh (every 30s) updates silently */
+      if (isInitialLoad) setLoading(true);
       const response = await fetch(`${VERCEL_PROXY_URL}/usage-info`, {
         method: 'POST',
         headers: {
@@ -140,7 +142,7 @@ const UsageDisplay: React.FC<UsageDisplayProps> = ({
 
   if (loading) {
     return (
-      <div style={{ padding: compact ? '8px' : '16px', textAlign: 'center', color: '#5f6368' }}>
+      <div className={`usage-loading${compact ? ' usage-loading--compact' : ''}`}>
         Loading usage...
       </div>
     );
@@ -177,53 +179,36 @@ const UsageDisplay: React.FC<UsageDisplayProps> = ({
     return '#10b981';
   };
 
+  const isAlert = status === 'warning' || status === 'overage' || status === 'exceeded';
+  const cardClass = [
+    'usage-card',
+    compact ? 'usage-card--compact' : '',
+    isAlert ? 'usage-card--alert' : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <div style={{
-      padding: compact ? '12px' : '16px',
-      background: status === 'warning' || status === 'overage' || status === 'exceeded' 
-        ? '#fef3c7' 
-        : '#f8f9fa',
-      borderRadius: '8px',
-      border: `1px solid ${status === 'warning' || status === 'overage' || status === 'exceeded' ? '#fbbf24' : '#e5e7eb'}`,
-      marginTop: compact ? '8px' : '16px',
-      fontSize: compact ? '12px' : '13px',
-    }}>
+    <div className={cardClass}>
       {/* Usage Progress Bar */}
-      <div style={{ marginBottom: '12px' }}>
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center',
-          marginBottom: '6px',
-          fontSize: compact ? '11px' : '12px',
-        }}>
-          <span style={{ fontWeight: '600', color: '#202124' }}>
+      <div className="usage-row">
+        <div className={`usage-header${compact ? ' usage-header--compact' : ''}`}>
+          <span className="usage-label">
             Generations: {generations.used.toLocaleString()} / {generations.included === 999999999999 ? 'Unlimited' : generations.included.toLocaleString()}
           </span>
-          <span style={{ color: getStatusColor(), fontWeight: '500' }}>
+          <span className="usage-percent" style={{ color: getStatusColor() }}>
             {generations.percentage}%
           </span>
         </div>
-        <div style={{
-          width: '100%',
-          height: compact ? '6px' : '8px',
-          backgroundColor: '#e5e7eb',
-          borderRadius: '4px',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            width: `${Math.min(generations.percentage, 100)}%`,
-            height: '100%',
-            backgroundColor: getProgressColor(),
-            transition: 'width 0.3s ease',
-          }} />
+        <div className={`usage-bar-track${compact ? ' usage-bar-track--compact' : ''}`}>
+          <div
+            className="usage-bar-fill"
+            style={{
+              width: `${Math.min(generations.percentage, 100)}%`,
+              backgroundColor: getProgressColor(),
+            }}
+          />
         </div>
         {generations.remaining >= 0 && generations.included !== 999999999999 && (
-          <div style={{ 
-            marginTop: '4px', 
-            fontSize: compact ? '10px' : '11px', 
-            color: '#5f6368' 
-          }}>
+          <div className={`usage-remaining${compact ? ' usage-remaining--compact' : ''}`}>
             {generations.remaining.toLocaleString()} remaining
           </div>
         )}
@@ -231,14 +216,8 @@ const UsageDisplay: React.FC<UsageDisplayProps> = ({
 
       {/* Overage Info */}
       {overage.enabled && overage.used > 0 && (
-        <div style={{ 
-          marginTop: '8px', 
-          padding: '8px', 
-          background: '#fee2e2', 
-          borderRadius: '4px',
-          fontSize: compact ? '11px' : '12px',
-        }}>
-          <div style={{ color: '#991b1b', fontWeight: '500' }}>
+        <div className={`usage-overage-box${compact ? ' usage-overage-box--compact' : ''}`}>
+          <div className="usage-overage-label">
             Overage: {overage.used.toLocaleString()} generations (${overage.cost.toFixed(2)})
           </div>
         </div>
@@ -246,68 +225,32 @@ const UsageDisplay: React.FC<UsageDisplayProps> = ({
 
       {/* Warning/Alert */}
       {status === 'warning' && (
-        <div style={{
-          marginTop: '8px',
-          padding: '8px',
-          background: '#fef3c7',
-          borderRadius: '4px',
-          fontSize: compact ? '11px' : '12px',
-          color: '#92400e',
-        }}>
-          ⚠️ {generations.percentage}% of quota used. {overage.enabled 
-            ? `Overage billing will activate at $${overage.rate}/generation.` 
+        <div className={`usage-warning-box${compact ? ' usage-warning-box--compact' : ''}`}>
+          ⚠️ {generations.percentage}% of quota used. {overage.enabled
+            ? `Overage billing will activate at $${overage.rate}/generation.`
             : 'Consider upgrading to avoid interruptions.'}
         </div>
       )}
 
       {status === 'exceeded' && !overage.enabled && (
-        <div style={{
-          marginTop: '8px',
-          padding: '8px',
-          background: '#fee2e2',
-          borderRadius: '4px',
-          fontSize: compact ? '11px' : '12px',
-          color: '#991b1b',
-        }}>
+        <div className={`usage-exceeded-box${compact ? ' usage-exceeded-box--compact' : ''}`}>
           ❌ Quota exceeded. Please upgrade your plan or enable overages.
         </div>
       )}
 
       {/* Upgrade Recommendation */}
       {upgradeRec && upgradeRec.show && (
-        <div style={{
-          marginTop: '12px',
-          padding: '12px',
-          background: '#dbeafe',
-          borderRadius: '6px',
-          border: '1px solid #93c5fd',
-          fontSize: compact ? '11px' : '12px',
-        }}>
-          <div style={{ 
-            color: '#1e40af', 
-            fontWeight: '600', 
-            marginBottom: '6px',
-            fontSize: compact ? '11px' : '13px',
-          }}>
+        <div className={`usage-upgrade-box${compact ? ' usage-upgrade-box--compact' : ''}`}>
+          <div className={`usage-upgrade-title${compact ? ' usage-upgrade-title--compact' : ''}`}>
             💡 Upgrade Recommendation
           </div>
-          <div style={{ color: '#1e3a8a', marginBottom: '8px', lineHeight: '1.4' }}>
+          <div className="usage-upgrade-message">
             {upgradeRec.message}
           </div>
           <button
             type="button"
+            className="usage-upgrade-button"
             onClick={() => window.open(`https://xrepl.ai/pricing?license=${licenseKey}`, '_blank')}
-            style={{
-              padding: '10px 24px',
-              fontSize: '14px',
-              fontWeight: '500',
-              backgroundColor: '#5567b9',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-            }}
           >
             Upgrade to {upgradeRec.nextTier === 'pro_plus' ? 'Pro+' : upgradeRec.nextTier.charAt(0).toUpperCase() + upgradeRec.nextTier.slice(1)}
           </button>
@@ -316,12 +259,7 @@ const UsageDisplay: React.FC<UsageDisplayProps> = ({
 
       {/* Next Reset */}
       {next_reset && (
-        <div style={{ 
-          marginTop: '8px', 
-          fontSize: compact ? '10px' : '11px', 
-          color: '#6b7280',
-          textAlign: 'right',
-        }}>
+        <div className={`usage-reset${compact ? ' usage-reset--compact' : ''}`}>
           Resets {formatNextReset(next_reset)}
         </div>
       )}

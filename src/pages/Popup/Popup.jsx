@@ -17,6 +17,12 @@ const getBrowser = () => {
 // Plans that include content packages (add-ons)
 const PLANS_WITH_PACKAGES = ['pro', 'ultimate', 'pro_plus', 'basic'];
 
+// Plans that include priority support (for plan details bullet list)
+const PLANS_WITH_PRIORITY_SUPPORT = ['pro', 'pro_plus', 'ultimate'];
+
+// Threshold for displaying "Unlimited" instead of a number
+const UNLIMITED_GENERATIONS = 999999999999;
+
 const Popup = () => {
   const [apiProvider, setApiProvider] = useState('');
   const [apiModel, setApiModel] = useState('');
@@ -25,16 +31,19 @@ const Popup = () => {
   const [licenseKey, setLicenseKey] = useState('');
   const [activeTab, setActiveTab] = useState('settings');
   const [usageData, setUsageData] = useState(null);
+  const [defaultRole, setDefaultRole] = useState('generic');
+  const [packagesData, setPackagesData] = useState(null);
 
   useEffect(() => {
     const browserAPI = getBrowser();
     if (!browserAPI) return;
 
     if (browserAPI.storage) {
-      browserAPI.storage.sync.get(['apiProvider', 'apiModel', 'licenseKey'], (result) => {
+      browserAPI.storage.sync.get(['apiProvider', 'apiModel', 'licenseKey', 'defaultRole'], (result) => {
         setApiProvider(result.apiProvider || 'grok');
         setApiModel(result.apiModel || 'grok-4-latest');
         setLicenseKey(result.licenseKey || '');
+        setDefaultRole(result.defaultRole && typeof result.defaultRole === 'string' ? result.defaultRole : 'generic');
       });
     }
 
@@ -136,6 +145,29 @@ const Popup = () => {
     return () => clearInterval(interval);
   }, [licenseKey]);
 
+  // Fetch packages list for Settings tab (included packages + default role)
+  useEffect(() => {
+    if (!licenseKey || licenseKey.trim().length === 0) {
+      setPackagesData(null);
+      return;
+    }
+    const fetchPackages = async () => {
+      try {
+        const response = await fetch(`${VERCEL_PROXY_URL}/packages/list`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ licenseKey: licenseKey.trim() }),
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        setPackagesData(data.valid ? data : null);
+      } catch (err) {
+        setPackagesData(null);
+      }
+    };
+    fetchPackages();
+  }, [licenseKey]);
+
   const openOptions = () => {
     const browserAPI = getBrowser();
     if (browserAPI && browserAPI.runtime) {
@@ -218,21 +250,89 @@ const Popup = () => {
         {activeTab === 'settings' && (
           <div className="popup-tab-panel">
             <div className="popup-settings-section">
-              <p className="popup-setting-row">
+              <div className="popup-setting-row">
                 <strong>Plan:</strong>{' '}
                 <span className="setting-value">
                   {usageData ? planDisplayName(usageData.plan) : 'Loading…'}
                 </span>
-              </p>
-              <p className="popup-setting-row">
-                <strong>Packages:</strong>{' '}
-                <span className="setting-value">
-                  {usageData ? (hasPackages ? 'Included with plan' : '—') : 'Loading…'}
-                </span>
-              </p>
+              </div>
+              {usageData && usageData.plan && usageData.generations && (
+                <ul className="popup-plan-details-list">
+                  <li>
+                    {usageData.generations.included >= UNLIMITED_GENERATIONS
+                      ? 'Unlimited generations per month'
+                      : `${(usageData.generations.included || 0).toLocaleString()} generations per month`}
+                  </li>
+                  <li>
+                    {hasPackages && packagesData?.packages
+                      ? (() => {
+                          const included = (packagesData.packages.included || []).length;
+                          const purchased = (packagesData.packages.purchased || []).length;
+                          if (included === 0 && purchased === 0) return 'Generic only';
+                          const parts = [];
+                          if (included > 0) parts.push(`${included} content package${included === 1 ? '' : 's'} included`);
+                          if (purchased > 0) parts.push(`${purchased} purchased`);
+                          return parts.join(', ');
+                        })()
+                      : 'Generic only'}
+                  </li>
+                  <li>
+                    {usageData.overage?.enabled && typeof usageData.overage.rate === 'number'
+                      ? `Overage available at $${usageData.overage.rate.toFixed(2)}/generation`
+                      : 'Overage not available'}
+                  </li>
+                  {PLANS_WITH_PRIORITY_SUPPORT.includes(usageData.plan) && (
+                    <li>Priority support</li>
+                  )}
+                </ul>
+              )}
+              <div className="popup-setting-row popup-packages-row">
+                <strong>Packages:</strong>
+              </div>
+              {usageData && (hasPackages ? (
+                <ul className="popup-packages-list">
+                  {packagesData && packagesData.packages ? (
+                    (() => {
+                      const included = packagesData.packages.included || [];
+                      const purchased = packagesData.packages.purchased || [];
+                      const combined = [...included, ...purchased];
+                      const hasGeneric = combined.some((p) => p.name === 'generic');
+                      let list = combined;
+                      if (defaultRole === 'generic' && !hasGeneric) {
+                        list = [{ name: 'generic', title: 'General' }, ...list];
+                      }
+                      if (list.length === 0) {
+                        return (
+                          <li>
+                            <span className="setting-value">Generic</span>
+                            {defaultRole === 'generic' && <span className="popup-default-badge">Default</span>}
+                          </li>
+                        );
+                      }
+                      return list.map((pkg) => (
+                        <li key={pkg.id || pkg.name}>
+                          <span className="setting-value">{pkg.title || (pkg.name ? pkg.name.charAt(0).toUpperCase() + pkg.name.slice(1) : '—')}</span>
+                          {pkg.name === defaultRole && <span className="popup-default-badge">Default</span>}
+                        </li>
+                      ));
+                    })()
+                  ) : (
+                    <li className="popup-packages-loading">Loading…</li>
+                  )}
+                </ul>
+              ) : usageData && usageData.plan === 'free' ? (
+                <ul className="popup-packages-list">
+                  <li>
+                    <span className="setting-value">General</span>
+                    {defaultRole === 'generic' && <span className="popup-default-badge">Default</span>}
+                  </li>
+                </ul>
+              ) : (
+                <p className="popup-packages-none">—</p>
+              ))}
             </div>
 
-            <UsageDisplay licenseKey={licenseKey} showUpgradeRecommendation={true} compact={false} />
+            <UsageDisplay licenseKey={licenseKey} showUpgradeRecommendation={true} compact={true} />
 
             {usageData && usageData.overage && usageData.generations && usageData.generations.used >= usageData.generations.included && usageData.overage.used > 0 && (
               <div className="popup-overage-due">

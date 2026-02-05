@@ -1,6 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 
+import '../../styles/variables.css';
+import '../../styles/base.css';
 import Options from './Options';
 import './index.css';
 

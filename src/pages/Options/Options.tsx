@@ -84,9 +84,9 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     expiresAt?: string;
   }>({ status: 'idle', message: '' });
   const [packagesData, setPackagesData] = useState<{
-    included: Array<{ id: string; name: string; description: string; status: string }>;
-    purchased: Array<{ id: string; name: string; description: string; status: string; payment_status?: string }>;
-    available: Array<{ id: string; name: string; description: string; price_usd: number }>;
+    included: Array<{ id: string; name: string; title?: string | null; details?: string | null; description: string; status: string }>;
+    purchased: Array<{ id: string; name: string; title?: string | null; details?: string | null; description: string; status: string; payment_status?: string }>;
+    available: Array<{ id: string; name: string; title?: string | null; details?: string | null; description: string; price_usd: number }>;
     all_active: string[];
   } | null>(null);
   const [packagesLoading, setPackagesLoading] = useState<boolean>(false);
@@ -699,48 +699,52 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   const hasNonGenericPackages = selectedPackages.some(pkg => pkg !== 'generic');
   const showDefaultRoleTab = selectedPackages.length > 1 || hasNonGenericPackages;
 
+  // Map package name -> user-facing title (for Default Role dropdown and any UI that only has name)
+  const packageTitleByName = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    if (packagesData) {
+      const all = [...(packagesData.included || []), ...(packagesData.purchased || [])];
+      all.forEach((p: { name: string; title?: string | null }) => {
+        map[p.name] = (p.title && p.title.trim()) ? p.title : (p.name ? p.name.charAt(0).toUpperCase() + p.name.slice(1) : '—');
+      });
+    }
+    if (!map['generic']) map['generic'] = 'General';
+    return map;
+  }, [packagesData]);
+
   return (
     <div className="OptionsContainer">
       <div className="OptionsContent">
-        <h1 style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+        <h1 className="OptionsPageTitle">
           {iconUrl && (
             <img
               src={iconUrl}
               alt="xRepl.ai"
-              style={{ width: '32px', height: '32px', objectFit: 'contain' }}
+              className="OptionsPageTitleIcon"
             />
           )}
           <span>
-            <span style={{ color: '#5567b9', fontWeight: '600' }}>xRepl.ai</span>
+            <span className="OptionsPageTitleBrand">xRepl.ai</span>
             <span> - Settings</span>
           </span>
         </h1>
 
         {/* License Key Section - Always visible at top */}
-        <div className="SettingsSection" style={{ marginBottom: '30px', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '20px', backgroundColor: '#f8f9fa' }}>
-          <h2 style={{ marginTop: 0 }}>License Activation</h2>
-          <p className="HelpText" style={{ marginBottom: '16px', fontStyle: 'normal' }}>
+        <div className="SettingsSection LicenseSection">
+          <h2>License Activation</h2>
+          <p className="HelpTextPlain">
             Enter your license key to activate your subscription. Your license key was sent to your email after purchase.
           </p>
           <div className="SettingGroup">
-            <label htmlFor="license-key" style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>
-              License Key:
-            </label>
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+            <label htmlFor="license-key">License Key:</label>
+            <div className="FlexRow">
               <input
                 id="license-key"
                 type="text"
                 value={licenseKey}
                 onChange={(e) => setLicenseKey(e.target.value)}
                 placeholder="XRPL-XXXX-XXXX-XXXX"
-                style={{
-                  flex: 1,
-                  padding: '10px 12px',
-                  fontSize: '14px',
-                  border: '1px solid #dadce0',
-                  borderRadius: '4px',
-                  fontFamily: 'monospace',
-                }}
+                className="LicenseInput"
                 onKeyPress={(e) => {
                   if (e.key === 'Enter' && licenseKey.trim()) {
                     handleActivateLicense();
@@ -764,8 +768,8 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                   disabled={licenseStatus.status === 'loading'}
                 >
                   {licenseStatus.status === 'loading' ? (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ display: 'inline-block', width: '14px', height: '14px', border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}></span>
+                    <span className="SpinnerRow">
+                      <span className="Spinner" />
                       Validating...
                     </span>
                   ) : (
@@ -778,33 +782,19 @@ const Options: React.FC<Props> = ({ title }: Props) => {
             {/* Status Display */}
             {licenseStatus.status !== 'idle' && (
               <div
-                style={{
-                  marginTop: '12px',
-                  padding: '12px',
-                  borderRadius: '4px',
-                  backgroundColor:
-                    licenseStatus.status === 'success'
-                      ? '#e6f4ea'
-                      : licenseStatus.status === 'error'
-                      ? '#fce8e6'
-                      : '#e8f0fe',
-                  color:
-                    licenseStatus.status === 'success'
-                      ? '#137333'
-                      : licenseStatus.status === 'error'
-                      ? '#c5221f'
-                      : '#1967d2',
-                  fontSize: '14px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                }}
+                className={`LicenseStatusBox LicenseStatusBox--${
+                  licenseStatus.status === 'success'
+                    ? 'success'
+                    : licenseStatus.status === 'error'
+                    ? 'error'
+                    : 'loading'
+                }`}
               >
                 {licenseStatus.status === 'success' && (
-                  <span style={{ fontSize: '18px' }}>✓</span>
+                  <span className="LicenseStatusIcon">✓</span>
                 )}
                 {licenseStatus.status === 'error' && (
-                  <span style={{ fontSize: '18px' }}>✗</span>
+                  <span className="LicenseStatusIcon">✗</span>
                 )}
                 <span>{licenseStatus.message}</span>
                 {licenseStatus.status === 'error' && (
@@ -812,12 +802,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                     href="https://xrepl.ai/pricing"
                     target="_blank"
                     rel="noopener noreferrer"
-                    style={{
-                      marginLeft: 'auto',
-                      color: '#1967d2',
-                      textDecoration: 'underline',
-                      fontSize: '13px',
-                    }}
+                    className="LicenseStatusLink"
                   >
                     Get Access
                   </a>
@@ -863,7 +848,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           {activeTab === 'models' && (
         <div className="SettingsSection">
           <h2>API Configuration</h2>
-          <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
+          <p className="HelpText HelpTextSection">
             Select your preferred AI provider and model. API keys are managed by the extension developer.
           </p>
 
@@ -909,7 +894,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           {activeTab === 'generation' && (
             <div className="SettingsSection">
               <h2>Generation Preferences</h2>
-              <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
+              <p className="HelpText HelpTextSection">
                 Configure preferences for draft generation and email classification.
               </p>
 
@@ -930,7 +915,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
               }}
               className="SettingInputNumber"
             />
-            <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+            <p className="HelpText HelpTextInline">
                   Number of response variants to generate (1-{currentPlan?.maxVariants || 7})
                   {currentPlan && ` - Your ${currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} plan allows up to ${currentPlan.maxVariants} variants`}
                 </p>
@@ -953,7 +938,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                   }}
                   className="SettingInputNumber"
                 />
-                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                <p className="HelpText HelpTextInline">
                   Number of response goals to generate (1-{currentPlan?.maxGoals || 5})
                   {currentPlan && ` - Your ${currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} plan allows up to ${currentPlan.maxGoals} goals`}
                 </p>
@@ -976,7 +961,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                   }}
                   className="SettingInputNumber"
                 />
-                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                <p className="HelpText HelpTextInline">
                   Number of tone options to generate (1-{currentPlan?.maxTones || 5})
                   {currentPlan && ` - Your ${currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} plan allows up to ${currentPlan.maxTones} tones`}
                 </p>
@@ -986,7 +971,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
               {currentPlan && currentPlan.classificationConfidenceEnabled && (
                 <div className="SettingGroup">
                   <label htmlFor="confidence-threshold">Minimum Classification Confidence:</label>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div className="FlexRowCenter">
                     <input
                       id="confidence-threshold"
                       type="range"
@@ -1000,13 +985,13 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                           setConfig({ ...config, classificationConfidenceThreshold: value });
                         }
                       }}
-                      style={{ flex: 1, maxWidth: '300px' }}
+                      className="ConfidenceSlider"
                     />
-                    <span style={{ minWidth: '60px', fontSize: '14px', fontWeight: 'bold' }}>
+                    <span className="ConfidenceValue">
                       {(config.classificationConfidenceThreshold * 100).toFixed(0)}%
                     </span>
                   </div>
-                  <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                  <p className="HelpText HelpTextInline">
                     If classification confidence is below this threshold, the system will use Generic package. Higher values = stricter matching (0.0-1.0, default: 0.85)
                   </p>
                 </div>
@@ -1014,7 +999,10 @@ const Options: React.FC<Props> = ({ title }: Props) => {
 
               {/* Style Mimicking Toggle - Show for all plans, but disabled for Free/Basic */}
               <div className="SettingGroup">
-                <label htmlFor="style-mimicking" style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: currentPlan?.styleMimickingEnabled ? 'pointer' : 'not-allowed' }}>
+                <label
+                  htmlFor="style-mimicking"
+                  className={`CheckboxLabel${!currentPlan?.styleMimickingEnabled ? ' CheckboxLabel--disabled' : ''}`}
+                >
                   <input
                     id="style-mimicking"
                     type="checkbox"
@@ -1025,26 +1013,21 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                       }
                     }}
                     disabled={!currentPlan?.styleMimickingEnabled}
-                    style={{
-                      width: '18px',
-                      height: '18px',
-                      cursor: currentPlan?.styleMimickingEnabled ? 'pointer' : 'not-allowed',
-                      opacity: currentPlan?.styleMimickingEnabled ? 1 : 0.5
-                    }}
+                    className="CheckboxInput"
                   />
-                  <span style={{ opacity: currentPlan?.styleMimickingEnabled ? 1 : 0.6 }}>
+                  <span className={!currentPlan?.styleMimickingEnabled ? 'LabelMuted' : ''}>
                     Enable User Style Mimicking
                     {!currentPlan?.styleMimickingEnabled && (
-                      <span style={{ marginLeft: '8px', fontSize: '12px', color: '#ea4335', fontWeight: 'normal' }}>
+                      <span className="PlanOnlyBadge">
                         (Pro/Ultimate only)
                       </span>
                     )}
                   </span>
                 </label>
-                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368', marginLeft: '30px' }}>
+                <p className="HelpText HelpTextIndent">
                   When enabled, the extension analyzes your writing style from previous emails and matches it in generated drafts.
                   {!currentPlan?.styleMimickingEnabled && (
-                    <span style={{ display: 'block', marginTop: '4px', color: '#ea4335', fontWeight: '500' }}>
+                    <span className="UpgradePrompt">
                       Upgrade to Pro or Ultimate plan to enable this feature.
                     </span>
                   )}
@@ -1057,7 +1040,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           {activeTab === 'packages' && (
             <div className="SettingsSection">
               <h2>Subscription Plan</h2>
-              <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
+              <p className="HelpText HelpTextSection">
                 {licenseStatus.status === 'success' && licenseStatus.plan
                   ? `Your subscription plan is determined by your active license key. You are currently on the ${licenseStatus.plan.charAt(0).toUpperCase() + licenseStatus.plan.slice(1)} plan.`
                   : 'Activate a license key above to unlock paid plans. Without a license, you are limited to the Free plan.'}
@@ -1066,48 +1049,27 @@ const Options: React.FC<Props> = ({ title }: Props) => {
               {/* Plan Details Display */}
               {licenseStatus.status === 'success' && licenseStatus.plan && currentPlan ? (
                 <div className="SettingGroup">
-                  <div style={{ 
-                    padding: '16px', 
-                    border: '1px solid #e0e0e0', 
-                    borderRadius: '4px', 
-                    backgroundColor: '#f8f9fa',
-                    marginBottom: '20px'
-                  }}>
-                    <div style={{ fontWeight: '600', marginBottom: '8px', fontSize: '16px' }}>
+                  <div className="PlanDetailsCard">
+                    <div className="PlanDetailsTitle">
                       {licenseStatus.plan && licenseStatus.plan.charAt(0).toUpperCase() + licenseStatus.plan.slice(1)} Plan Details
                     </div>
-                    <p className="HelpText" style={{ marginTop: '8px', fontSize: '13px', color: '#5f6368' }}>
+                    <p className="PlanDetailsSummary">
                       Max Goals: {currentPlan.maxGoals} | Max Variants: {currentPlan.maxVariants} | Max Tones: {currentPlan.maxTones} |
                       Generations: {currentPlan.maxGenerationsPerMonth === 999999999999 ? 'Unlimited' : currentPlan.maxGenerationsPerMonth}/month
                     </p>
                     {/* Enable Overage Billing - only when user has valid license and plan */}
-                    <div className="SettingGroup" style={{ marginTop: '16px', marginBottom: '12px' }}>
-                      <label style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '12px',
-                        cursor: overageLoading ? 'not-allowed' : 'pointer',
-                        padding: '12px',
-                        border: '1px solid #dadce0',
-                        borderRadius: '4px',
-                        backgroundColor: '#fff',
-                      }}>
+                    <div className="SettingGroup OverageCheckboxGroup">
+                      <label className="OverageCheckboxLabel">
                         <input
                           type="checkbox"
                           checked={overageEnabled}
                           onChange={(e) => updateOverageSetting(e.target.checked)}
                           disabled={overageLoading}
-                          style={{
-                            width: '18px',
-                            height: '18px',
-                            cursor: overageLoading ? 'not-allowed' : 'pointer',
-                          }}
+                          className="CheckboxInput"
                         />
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: '500', marginBottom: '4px', fontSize: '14px', color: '#202124' }}>
-                            Enable Overage Billing
-                          </div>
-                          <p className="HelpText" style={{ margin: 0, fontSize: '12px', color: '#5f6368' }}>
+                        <div className="OverageCheckboxContent">
+                          <div className="OverageCheckboxTitle">Enable Overage Billing</div>
+                          <p className="HelpText HelpTextNoMargin">
                             {overageEnabled
                               ? 'When enabled, you can exceed your monthly quota. Extra generations will be charged at your plan\'s overage rate at the end of the billing cycle.'
                               : 'When disabled, generation will be blocked once you reach your monthly quota. Enable to allow overages with automatic billing.'}
@@ -1115,18 +1077,15 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                         </div>
                       </label>
                       {overageLoading && (
-                        <p className="HelpText" style={{ marginTop: '8px', fontSize: '12px', color: '#5f6368' }}>
-                          Updating...
-                        </p>
+                        <p className="HelpText HelpTextInline">Updating...</p>
                       )}
                     </div>
                     <button
                       type="button"
-                      className="SaveButton"
+                      className="SaveButton ViewPlansButton"
                       onClick={() => {
                         window.open('https://xrepl.ai/pricing', '_blank');
                       }}
-                      style={{ marginTop: '12px' }}
                     >
                       View Plans
                     </button>
@@ -1137,7 +1096,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 </div>
               ) : (
                 <div className="SettingGroup">
-                  <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#ea4335' }}>
+                  <p className="HelpText HelpTextWarning">
                     ⚠️ License key required for paid plans. Currently using Free plan limits.
                   </p>
                 </div>
@@ -1148,41 +1107,31 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 <>
                   {packagesLoading ? (
                     <>
-                      <h2 style={{ marginTop: '40px' }}>Your Packages</h2>
-                      <p className="HelpText" style={{ marginBottom: '20px' }}>Loading packages...</p>
+                      <h2 className="SectionHeading">Your Packages</h2>
+                      <p className="HelpText HelpTextSection">Loading packages...</p>
                     </>
                   ) : packagesData && (
                     (packagesData.included && packagesData.included.length > 0) ||
                     (packagesData.purchased && packagesData.purchased.length > 0)
                   ) ? (
                     <>
-                      <h2 style={{ marginTop: '40px' }}>Your Packages</h2>
+                      <h2 className="SectionHeading">Your Packages</h2>
                       {/* Included Packages */}
                       {packagesData.included && packagesData.included.length > 0 && (
-                        <div style={{ marginBottom: '24px' }}>
-                          <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px', color: '#1a73e8' }}>
-                            Included Packages
-                          </h3>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div className="PackageSubsection">
+                          <h3 className="PackageSubsectionTitle">Included Packages</h3>
+                          <div className="PackageList">
                             {packagesData.included.map((pkg) => (
-                              <div
-                                key={pkg.id}
-                                style={{
-                                  padding: '12px',
-                                  border: '1px solid #e0e0e0',
-                                  borderRadius: '4px',
-                                  backgroundColor: '#f0f7ff',
-                                }}
-                              >
-                                <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
-                                  {pkg.name}
+                              <div key={pkg.id} className="PackageCard">
+                                <div className="PackageCardTitle">
+                                  {pkg.title ?? (pkg.name ? pkg.name.charAt(0).toUpperCase() + pkg.name.slice(1) : '—')}
                                   {pkg.status === 'active' && (
-                                    <span style={{ marginLeft: '8px', fontSize: '12px', color: '#34a853', fontWeight: 'normal' }}>
-                                      ✓ Active
-                                    </span>
+                                    <span className="PackageStatusBadge PackageStatusBadge--active">✓ Active</span>
                                   )}
                                 </div>
-                                <div style={{ fontSize: '13px', color: '#5f6368' }}>{pkg.description}</div>
+                                {(pkg.details ?? '').trim() && (
+                                  <div className="PackageDetails">{pkg.details}</div>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -1191,32 +1140,25 @@ const Options: React.FC<Props> = ({ title }: Props) => {
 
                       {/* Purchased Packages */}
                       {packagesData.purchased && packagesData.purchased.length > 0 && (
-                        <div style={{ marginBottom: '24px' }}>
-                          <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px', color: '#1a73e8' }}>
-                            Purchased Packages
-                          </h3>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div className="PackageSubsection">
+                          <h3 className="PackageSubsectionTitle">Purchased Packages</h3>
+                          <div className="PackageList">
                             {packagesData.purchased.map((pkg) => (
                               <div
                                 key={pkg.id}
-                                style={{
-                                  padding: '12px',
-                                  border: '1px solid #e0e0e0',
-                                  borderRadius: '4px',
-                                  backgroundColor: pkg.status === 'active' ? '#f0f7ff' : '#fff3cd',
-                                }}
+                                className={`PackageCard${pkg.status !== 'active' ? ' PackageCard--inactive' : ''}`}
                               >
-                                <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize' }}>
-                                  {pkg.name}
-                                  <span style={{ marginLeft: '8px', fontSize: '12px', color: pkg.status === 'active' ? '#34a853' : '#ea4335', fontWeight: 'normal' }}>
+                                <div className="PackageCardTitle">
+                                  {pkg.title ?? (pkg.name ? pkg.name.charAt(0).toUpperCase() + pkg.name.slice(1) : '—')}
+                                  <span className={`PackageStatusBadge ${pkg.status === 'active' ? 'PackageStatusBadge--active' : 'PackageStatusBadge--inactive'}`}>
                                     {pkg.status === 'active' ? '✓ Active' : `⚠ ${pkg.status}`}
                                   </span>
                                 </div>
-                                <div style={{ fontSize: '13px', color: '#5f6368' }}>{pkg.description}</div>
+                                {(pkg.details ?? '').trim() && (
+                                  <div className="PackageDetails">{pkg.details}</div>
+                                )}
                                 {pkg.payment_status && (
-                                  <div style={{ fontSize: '12px', color: '#5f6368', marginTop: '4px' }}>
-                                    Payment: {pkg.payment_status}
-                                  </div>
+                                  <div className="PackagePayment">Payment: {pkg.payment_status}</div>
                                 )}
                               </div>
                             ))}
@@ -1229,8 +1171,8 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                     null
                   ) : (
                     <>
-                      <h2 style={{ marginTop: '40px' }}>Your Packages</h2>
-                      <p className="HelpText" style={{ marginBottom: '20px' }}>
+                      <h2 className="SectionHeading">Your Packages</h2>
+                      <p className="HelpText HelpTextSection">
                         Unable to load packages. Please check your license key.
                       </p>
                     </>
@@ -1240,45 +1182,26 @@ const Options: React.FC<Props> = ({ title }: Props) => {
 
               {/* Available Packages Section - Only show when packages are available for purchase */}
               {licenseStatus.status === 'success' && !packagesLoading && packagesData && packagesData.available && packagesData.available.length > 0 && (
-                <div style={{ marginTop: '40px' }} data-section="available-packages">
-                  <h2 style={{ marginBottom: '12px' }}>Available Packages</h2>
-                  <p className="HelpText" style={{ marginBottom: '12px', fontSize: '13px' }}>
+                <div className="AvailableSection" data-section="available-packages">
+                  <h2>Available Packages</h2>
+                  <p className="HelpText HelpTextAvailable">
                     Purchase additional packages to unlock more email types.
                   </p>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div className="PackageList">
                     {packagesData.available.map((pkg) => (
-                      <div
-                        key={pkg.id}
-                        style={{
-                          padding: '12px',
-                          border: '1px solid #e0e0e0',
-                          borderRadius: '4px',
-                          backgroundColor: '#fff',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <div style={{ flex: 1, marginRight: '16px' }}>
-                          <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'capitalize', fontSize: '14px' }}>
-                            {pkg.name}
+                      <div key={pkg.id} className="AvailablePackageCard">
+                        <div className="AvailablePackageCardContent">
+                          <div className="AvailablePackageCardTitle">
+                            {pkg.title ?? (pkg.name ? pkg.name.charAt(0).toUpperCase() + pkg.name.slice(1) : '—')}
                           </div>
-                          <div style={{ fontSize: '13px', color: '#5f6368' }}>{pkg.description}</div>
+                          {(pkg.details ?? '').trim() && (
+                            <div className="PackageDetails">{pkg.details}</div>
+                          )}
                         </div>
                         <button
+                          type="button"
+                          className="SaveButton SaveButton--shrink"
                           onClick={() => handlePackagePurchase(pkg.id, pkg.name)}
-                          style={{
-                            padding: '10px 24px',
-                            fontSize: '14px',
-                            fontWeight: '500',
-                            backgroundColor: '#5567b9',
-                            color: '#fff',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            whiteSpace: 'nowrap',
-                            flexShrink: 0,
-                          }}
                         >
                           ${pkg.price_usd.toFixed(2)}
                         </button>
@@ -1294,7 +1217,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           {activeTab === 'defaultRole' && showDefaultRoleTab && (
             <div className="SettingsSection">
               <h2>Default Role</h2>
-              <p className="HelpText" style={{ marginBottom: '20px', fontStyle: 'normal' }}>
+              <p className="HelpText HelpTextSection">
                 Select the default role to use when generating drafts for new emails. This will be pre-selected in the dropdown.
               </p>
 
@@ -1304,10 +1227,10 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                   id="default-role"
                   value={defaultRole}
                   onChange={(e) => setDefaultRole(e.target.value)}
-                  style={{ padding: '8px', fontSize: '14px', width: '200px' }}
+                  className="SelectDefault"
                 >
                   {selectedPackages.map((pkgName) => {
-                    const displayName = pkgName === 'generic' ? 'Generic' : pkgName.charAt(0).toUpperCase() + pkgName.slice(1);
+                    const displayName = packageTitleByName[pkgName] ?? (pkgName === 'generic' ? 'General' : pkgName.charAt(0).toUpperCase() + pkgName.slice(1));
                     return (
                       <option key={pkgName} value={pkgName}>
                         {displayName}
@@ -1315,7 +1238,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                     );
                   })}
                 </select>
-                <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
+                <p className="HelpText HelpTextInline">
                   This role will be automatically selected when generating drafts for new emails
                 </p>
               </div>
@@ -1323,7 +1246,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           )}
         </div>
 
-        <div style={{ marginTop: '40px', textAlign: 'center' }}>
+        <div className="SaveAllRow">
           <button type="button" className="SaveButton" onClick={handleSave}>
             {saved ? '✓ Saved!' : 'Save All Settings'}
           </button>

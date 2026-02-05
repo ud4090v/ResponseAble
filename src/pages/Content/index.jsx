@@ -29,25 +29,22 @@ let apiConfig = {
 // Fixed separator for parsing response variants - must match what we instruct AI to use
 const RESPONSE_VARIANT_SEPARATOR = '|||RESPONSE_VARIANT|||';
 
+// Get license key from storage (used by streaming and non-streaming API calls)
+const getLicenseKeyFromStorage = () => new Promise((resolve) => {
+    const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
+    if (!storage) {
+        resolve(null);
+        return;
+    }
+    storage.sync.get(['licenseKey'], (result) => {
+        resolve(result.licenseKey || null);
+    });
+});
+
 // Helper function to call new streaming API endpoints
 const callNewStreamingAPI = async (url, body, onChunk = null, abortSignal = null) => {
-    // Get license key from storage and add it to the request body
-    const licenseKey = await new Promise((resolve) => {
-        const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
-        if (!storage) {
-            resolve(null);
-            return;
-        }
-        storage.sync.get(['licenseKey'], (result) => {
-            resolve(result.licenseKey || null);
-        });
-    });
-
-    // Add license key to request body
-    const requestBody = {
-        ...body,
-        licenseKey: licenseKey || null
-    };
+    const licenseKey = await getLicenseKeyFromStorage();
+    const requestBody = { ...body, licenseKey: licenseKey || null };
 
     const response = await fetch(url, {
         method: 'POST',
@@ -588,12 +585,14 @@ const analyzeWritingStyle = async (userEmails, platform) => {
         : 'grok-4-fast';
 
     try {
+        const licenseKey = await getLicenseKeyFromStorage();
         const response = await fetch(`${VERCEL_PROXY_URL}/analyze-style`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
+                licenseKey,
                 userEmails: userEmails,
                 provider: apiConfig.provider,
                 model: classificationModel
@@ -699,12 +698,14 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         // but wrong classification when thread history is included (even with "IGNORE" instructions)
         let typeMatchResult;
         try {
+            const licenseKey = await getLicenseKeyFromStorage();
             const response = await fetch(`${VERCEL_PROXY_URL}/classify-email-type`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
+                    licenseKey,
                     emailContent: emailBeingRepliedTo,
                     recipientName: richContext.recipientName || richContext.to || actualSenderName,
                     recipientCompany: richContext.recipientCompany,
@@ -778,12 +779,14 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
 
             try {
                 // Use new API endpoint for generic goals determination
+                const licenseKey = await getLicenseKeyFromStorage();
                 const response = await fetch(`${VERCEL_PROXY_URL}/determine-goals-generic`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
+                        licenseKey,
                         emailContent: emailBeingRepliedTo,
                         genericIntent: genericIntent,
                         recipientName: actualSenderName || richContext.recipientName || richContext.to,
@@ -888,12 +891,14 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
             // BUT: We now include type-specific context to guide appropriate intent and variant generation
             try {
                 // Use new API endpoint for reply goals determination
+                const licenseKey = await getLicenseKeyFromStorage();
                 const response = await fetch(`${VERCEL_PROXY_URL}/determine-goals-reply`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
+                        licenseKey,
                         emailContent: emailBeingRepliedTo,
                         package: matchedType,
                         recipientName: actualSenderName || richContext.recipientName || richContext.to,
@@ -956,12 +961,14 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         let toneResult;
         try {
             // Use new API endpoint for tone determination
+            const licenseKey = await getLicenseKeyFromStorage();
             const response = await fetch(`${VERCEL_PROXY_URL}/determine-tones-reply`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
+                    licenseKey,
                     emailContent: emailBeingRepliedTo,
                     threadHistory: previousThreadHistory,
                     intent: intentGoalsResult.intent,
@@ -3499,6 +3506,7 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
             try {
                 await loadApiConfig();
                 const classificationModel = apiConfig.classificationModel || apiConfig.model;
+                const licenseKey = await getLicenseKeyFromStorage();
 
                 // Use new API endpoint for tone determination
                 const response = await fetch(`${VERCEL_PROXY_URL}/determine-tones-draft-generic`, {
@@ -3507,6 +3515,7 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
+                        licenseKey,
                         typedContent: bodyText || '',
                         subject: subject || '',
                         recipient: recipient || '',
@@ -3642,12 +3651,14 @@ Email body: ${composeBodyText || '(not provided)'}`
         let intentGoalsResult;
         try {
             // Use new API endpoint for draft goals determination
+            const licenseKey = await getLicenseKeyFromStorage();
             const response = await fetch(`${VERCEL_PROXY_URL}/determine-goals-draft`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
+                    licenseKey,
                     typedContent: composeBodyText,
                     package: selectedPackage,
                     recipientName: recipientName,
@@ -3758,12 +3769,14 @@ Email body: ${composeBodyText || '(not provided)'}`
         let toneResult;
         try {
             // Use new API endpoint for draft tone determination
+            const licenseKey = await getLicenseKeyFromStorage();
             const response = await fetch(`${VERCEL_PROXY_URL}/determine-tones-draft-specific`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
+                    licenseKey,
                     userIntent: userIntent,
                     responseGoals: intentGoalsResult.response_goals,
                     numTones: apiConfig.numTones || 3,

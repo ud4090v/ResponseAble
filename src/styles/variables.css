@@ -1,0 +1,71 @@
+/**
+ * Shared design tokens for xRepl extension.
+ * Use these in page/component CSS to keep styles consistent.
+ */
+:root {
+  /* Colors - text */
+  --color-text: #202124;
+  --color-text-muted: #5f6368;
+
+  /* Colors - primary / brand */
+  --color-primary: #1e3a8a;
+  --color-primary-hover: #1e40af;
+  --color-primary-light: #3b82f6;
+  --color-primary-button: #5567b9;
+  --color-primary-badge-bg: #e0e7ff;
+  --color-primary-hover-bg: #eff6ff;
+  --color-primary-button-hover: #4556a8;
+  --color-primary-button-active: #3d4a96;
+  --color-link: #1967d2;
+
+  /* Colors - UI */
+  --color-border: #dadce0;
+  --color-border-light: #e5e7eb;
+  --color-bg-subtle: #f8f9fa;
+  --color-bg-card: #fff;
+
+  /* Colors - feedback */
+  --color-success: #34a853;
+  --color-error: #991b1b;
+  --color-error-bg: #fee2e2;
+  --color-error-border: #fecaca;
+  --color-error-muted: #b91c1c;
+  --color-warning: #ea4335;
+
+  /* Usage / status (progress bar, alerts) */
+  --color-status-success: #10b981;
+  --color-status-warning: #f59e0b;
+  --color-status-danger: #ef4444;
+  --color-status-danger-dark: #dc2626;
+  --color-warning-bg: #fef3c7;
+  --color-warning-border: #fbbf24;
+  --color-warning-text: #92400e;
+  --color-upgrade-bg: #dbeafe;
+  --color-upgrade-border: #93c5fd;
+  --color-upgrade-title: #1e40af;
+
+  /* License status (Options page) */
+  --color-license-success-bg: #e6f4ea;
+  --color-license-success-text: #137333;
+  --color-license-error-bg: #fce8e6;
+  --color-license-error-text: #c5221f;
+  --color-license-loading-bg: #e8f0fe;
+
+  /* Panel dark theme */
+  --color-panel-bg: #242424;
+  --color-panel-text: #ffffff;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  --font-mono: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+
+  /* Spacing / radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --input-padding: 10px 12px;
+  --input-border: 1px solid var(--color-border);
+  --focus-ring: 0 0 0 2px rgba(26, 115, 232, 0.1);
+  --focus-border-color: #1a73e8;
+}

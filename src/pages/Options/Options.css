@@ -2,23 +2,18 @@
   padding: 20px;
   max-width: 800px;
   margin: 0 auto;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
 .OptionsContent {
-  background: white;
-  border-radius: 8px;
+  background: var(--color-bg-card);
+  border-radius: var(--radius-lg);
   padding: 30px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .OptionsContent h1 {
   margin-top: 0;
-  color: #202124;
+  color: var(--color-text);
   font-size: 28px;
   margin-bottom: 30px;
 }
@@ -28,11 +23,11 @@
 }
 
 .SettingsSection h2 {
-  color: #5f6368;
+  color: var(--color-text-muted);
   font-size: 18px;
   font-weight: 500;
   margin-bottom: 20px;
-  border-bottom: 1px solid #dadce0;
+  border-bottom: 1px solid var(--color-border);
   padding-bottom: 10px;
 }
 
@@ -43,7 +38,7 @@
 .SettingGroup label {
   display: block;
   font-weight: 500;
-  color: #202124;
+  color: var(--color-text);
   margin-bottom: 8px;
   font-size: 14px;
 }
@@ -52,20 +47,20 @@
 .SettingGroup input[type="password"],
 .SettingGroup input[type="text"] {
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #dadce0;
-  border-radius: 4px;
+  padding: var(--input-padding);
+  border: var(--input-border);
+  border-radius: var(--radius-sm);
   font-size: 14px;
-  color: #202124;
-  background: white;
+  color: var(--color-text);
+  background: var(--color-bg-card);
   box-sizing: border-box;
 }
 
 .SettingGroup select:focus,
 .SettingGroup input:focus {
   outline: none;
-  border-color: #1a73e8;
-  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.1);
+  border-color: var(--focus-border-color);
+  box-shadow: var(--focus-ring);
 }
 
 .SettingGroup select {
@@ -75,35 +70,35 @@
 /* Number inputs in Generation tab - same border/padding/radius as other inputs, fixed width */
 .SettingInputNumber {
   width: 120px;
-  padding: 10px 12px;
-  border: 1px solid #dadce0;
-  border-radius: 4px;
+  padding: var(--input-padding);
+  border: var(--input-border);
+  border-radius: var(--radius-sm);
   font-size: 14px;
-  color: #202124;
-  background: white;
+  color: var(--color-text);
+  background: var(--color-bg-card);
   box-sizing: border-box;
 }
 
 .SettingInputNumber:focus {
   outline: none;
-  border-color: #1a73e8;
-  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.1);
+  border-color: var(--focus-border-color);
+  box-shadow: var(--focus-ring);
 }
 
 .HelpText {
   margin-top: 6px;
   font-size: 12px;
-  color: #5f6368;
+  color: var(--color-text-muted);
   font-style: italic;
 }
 
 .SaveButton {
   display: inline-block;
-  background: #5567b9;
+  background: var(--color-primary-button);
   color: white;
   border: none;
   padding: 10px 24px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -114,21 +109,25 @@
 }
 
 .SaveButton:hover {
-  background: #4556a8;
+  background: var(--color-primary-button-hover);
 }
 
 .SaveButton:active {
-  background: #3d4a96;
+  background: var(--color-primary-button-active);
 }
 
 .SaveButton:disabled {
-  background: #dadce0;
+  background: var(--color-border);
   cursor: not-allowed;
+}
+
+.SaveButton--shrink {
+  flex-shrink: 0;
 }
 
 .TabsContainer {
   display: flex;
-  border-bottom: 2px solid #dadce0;
+  border-bottom: 2px solid var(--color-border);
   margin-bottom: 30px;
   gap: 0;
 }
@@ -139,7 +138,7 @@
   padding: 12px 24px;
   font-size: 14px;
   font-weight: 500;
-  color: #5f6368;
+  color: var(--color-text-muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
   margin-bottom: -2px;
@@ -148,13 +147,13 @@
 }
 
 .Tab:hover {
-  color: #1a73e8;
+  color: var(--focus-border-color);
   background: rgba(26, 115, 232, 0.05);
 }
 
 .TabActive {
-  color: #1a73e8;
-  border-bottom-color: #1a73e8;
+  color: var(--focus-border-color);
+  border-bottom-color: var(--focus-border-color);
 }
 
 .TabActive:hover {
@@ -173,4 +172,373 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Page title row (Options) */
+.OptionsPageTitle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.OptionsPageTitleIcon {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.OptionsPageTitleBrand {
+  color: var(--color-primary-button);
+  font-weight: 600;
+}
+
+/* License section card */
+.LicenseSection {
+  margin-bottom: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  background-color: var(--color-bg-subtle);
+}
+
+.LicenseSection h2 {
+  margin-top: 0;
+}
+
+.HelpTextPlain {
+  margin-top: 6px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-style: normal;
+}
+
+.HelpTextSection {
+  margin-bottom: 20px;
+  font-style: normal;
+}
+
+.HelpTextInline {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.HelpTextNoMargin {
+  margin: 0;
+}
+
+.HelpTextIndent {
+  margin-top: 4px;
+  margin-left: 30px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+/* Layout utilities */
+.FlexRow {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.FlexRowCenter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.LicenseInput {
+  flex: 1;
+  padding: var(--input-padding);
+  font-size: 14px;
+  border: var(--input-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  box-sizing: border-box;
+}
+
+.LicenseInput:focus {
+  outline: none;
+  border-color: var(--focus-border-color);
+  box-shadow: var(--focus-ring);
+}
+
+/* Spinner (validating) */
+.Spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.SpinnerRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* License status box */
+.LicenseStatusBox {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.LicenseStatusBox--success {
+  background-color: var(--color-license-success-bg);
+  color: var(--color-license-success-text);
+}
+
+.LicenseStatusBox--error {
+  background-color: var(--color-license-error-bg);
+  color: var(--color-license-error-text);
+}
+
+.LicenseStatusBox--loading {
+  background-color: var(--color-license-loading-bg);
+  color: var(--color-link);
+}
+
+.LicenseStatusIcon {
+  font-size: 18px;
+}
+
+.LicenseStatusLink {
+  margin-left: auto;
+  color: var(--color-link);
+  text-decoration: underline;
+  font-size: 13px;
+}
+
+/* Confidence slider row */
+.ConfidenceSlider {
+  flex: 1;
+  max-width: 300px;
+}
+
+.ConfidenceValue {
+  min-width: 60px;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+/* Checkbox label (e.g. Style Mimicking) */
+.CheckboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.CheckboxLabel--disabled {
+  cursor: not-allowed;
+}
+
+.CheckboxInput {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.CheckboxInput:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.LabelMuted {
+  opacity: 0.6;
+}
+
+.PlanOnlyBadge {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--color-warning);
+  font-weight: normal;
+}
+
+.UpgradePrompt {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-warning);
+  font-weight: 500;
+}
+
+.HelpTextWarning {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-warning);
+}
+
+/* Plan Details card (Subscription tab) */
+.PlanDetailsCard {
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-subtle);
+  margin-bottom: 20px;
+}
+
+.PlanDetailsTitle {
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 16px;
+}
+
+.PlanDetailsSummary {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.OverageCheckboxGroup {
+  margin-top: 16px;
+  margin-bottom: 12px;
+}
+
+.OverageCheckboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  padding: 12px;
+  border: var(--input-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-card);
+}
+
+.OverageCheckboxLabel:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.OverageCheckboxContent {
+  flex: 1;
+}
+
+.OverageCheckboxTitle {
+  font-weight: 500;
+  margin-bottom: 4px;
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.ViewPlansButton {
+  margin-top: 12px;
+}
+
+/* Section headings (e.g. Your Packages) */
+.SectionHeading {
+  margin-top: 40px;
+}
+
+.PackageSubsection {
+  margin-bottom: 24px;
+}
+
+.PackageSubsectionTitle {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--focus-border-color);
+}
+
+.PackageList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.PackageCard {
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: #f0f7ff;
+}
+
+.PackageCard--inactive {
+  background-color: #fff3cd;
+}
+
+.PackageCardTitle {
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.PackageStatusBadge {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: normal;
+}
+
+.PackageStatusBadge--active {
+  color: var(--color-success);
+}
+
+.PackageStatusBadge--inactive {
+  color: var(--color-warning);
+}
+
+.PackageDetails {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.PackagePayment {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+
+.AvailableSection {
+  margin-top: 40px;
+}
+
+.AvailableSection h2 {
+  margin-bottom: 12px;
+}
+
+.HelpTextAvailable {
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.AvailablePackageCard {
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-card);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.AvailablePackageCardContent {
+  flex: 1;
+  margin-right: 16px;
+}
+
+.AvailablePackageCardTitle {
+  font-weight: bold;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.SaveAllRow {
+  margin-top: 40px;
+  text-align: center;
+}
+
+.SelectDefault {
+  padding: 8px;
+  font-size: 14px;
+  width: 200px;
 }

@@ -1,7 +1,7 @@
 body {
-  background-color: #242424;
+  background-color: var(--color-panel-bg);
 }
 
 .container {
-  color: #ffffff;
+  color: var(--color-panel-text);
 }
