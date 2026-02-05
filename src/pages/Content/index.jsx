@@ -2919,7 +2919,7 @@ const injectGenerateButton = () => {
             if (isForward || !isReply) {
                 // NEW EMAIL: Extract compose window content and generate drafts
                 // Show progress overlay immediately for instant feedback
-                const iconUrl = getChromeRuntime()?.runtime?.getURL ? getChromeRuntime().runtime.getURL('icon-128.png') : null;
+                const iconUrl = getChromeRuntime()?.runtime?.getURL ? getChromeRuntime().runtime.getURL('xReplAI-brandw.png') : null;
                 showProgressOverlay(iconUrl);
 
                 // Validate license once and cache for this flow (avoids extra /validate before generation)
@@ -3286,7 +3286,7 @@ const injectGenerateButton = () => {
 
             // REPLY: Use classification flow with immediate progress overlay
             // Show progress overlay immediately for instant feedback
-            const iconUrl = getChromeRuntime()?.runtime?.getURL ? getChromeRuntime().runtime.getURL('icon-128.png') : null;
+            const iconUrl = getChromeRuntime()?.runtime?.getURL ? getChromeRuntime().runtime.getURL('xReplAI-brandw.png') : null;
             showProgressOverlay(iconUrl);
 
             // Validate license once and cache for this flow (avoids extra /validate before generation)
@@ -4265,15 +4265,15 @@ const showStreamingOverlay = (initialText = '') => {
     `;
     overlay.appendChild(style);
 
-    // Get icon URL for streaming overlay
+    // Get brand image URL for streaming overlay
     const streamingRuntime = getChromeRuntime();
-    const streamingIconUrl = streamingRuntime ? streamingRuntime.getURL('xrepl-light.png') : '';
+    const streamingBrandUrl = streamingRuntime ? streamingRuntime.getURL('xReplAI-brandw.png') : '';
 
     overlay.innerHTML += `
         <div style="flex-shrink: 0;">
-            <h2 style="margin-top:0; display: flex; align-items: center; gap: 8px;">
-                <img src="${streamingIconUrl}" alt="xRepl.ai" style="width: 24px; height: 24px; animation: responseable-pulse 1.5s ease-in-out infinite;" onerror="this.style.display='none'">
-                <span style="color:#5567b9;">xRepl.ai</span><span style="color:#9b9fa8;"> - Generating Drafts...</span>
+            <h2 style="margin-top:0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px;">
+                ${streamingBrandUrl ? `<img src="${streamingBrandUrl}" alt="xReplAI" style="max-height: 36px; width: auto; object-fit: contain; animation: responseable-pulse 1.5s ease-in-out infinite;" onerror="this.style.display='none'">` : ''}
+                <span style="color:#9b9fa8;">Generating Drafts...</span>
             </h2>
             <style>@keyframes responseable-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } }</style>
         </div>
@@ -4408,12 +4408,9 @@ const showProgressOverlay = (iconUrl) => {
             .responseable-tones-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
             .responseable-tone-chip { background: #e8f0fe; color: #1967d2; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
         </style>
-        <div style="display: flex; align-items: center; margin-bottom: 20px;">
-            ${iconUrl ? `<img src="${iconUrl}" alt="xRepl.ai" style="width: 24px; height: 24px; margin-right: 8px; animation: responseable-pulse 2s ease-in-out infinite;">` : ''}
-            <h2 style="margin: 0; font-size: 18px; font-weight: 500;">
-                <span style="color: #5567b9;">xRepl.ai</span>
-                <span style="color: #9b9fa8;"> - Analyzing Email</span>
-            </h2>
+        <div style="display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 20px;">
+            ${iconUrl ? `<img src="${iconUrl}" alt="xReplAI" style="max-height: 36px; width: auto; object-fit: contain; margin-bottom: 4px; animation: responseable-pulse 2s ease-in-out infinite;">` : ''}
+            <h2 style="margin: 0; font-size: 18px; font-weight: 500; color: #9b9fa8;">Analyzing Email</h2>
         </div>
         <div class="responseable-progress-steps">
             <div class="responseable-progress-step active" id="step-type">
@@ -4795,7 +4792,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
 
     overlay.innerHTML = `
     <div style="flex-shrink: 0;">
-      <h2 style="margin-top:0; display: flex; align-items: center; gap: 8px;"><span id="responseable-overlay-icon"></span> <span style="color:#5567b9;">xRepl.ai</span><span style="color:#5f6368;"> - ${isNewEmail ? 'Smart Drafts, Instantly' : 'Smart Replies, Instantly'}</span></h2>
+      <h2 style="margin-top:0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px;"><span id="responseable-overlay-icon"></span><span style="color:#5f6368;">${isNewEmail ? 'Smart Drafts, Instantly' : 'Smart Replies, Instantly'}</span></h2>
       ${isNewEmail ? '' : (selectedPackageNames ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : '')}
       ${newEmailDropdownHtml}
       ${!isNewEmail && matchedTypeInfo ? `<p style="color:#5f6368; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}
@@ -4845,23 +4842,23 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     </div>
   `;
 
-    // Create and insert icon programmatically
+    // Create and insert brand image programmatically
     const runtime = getChromeRuntime();
     const iconContainer = overlay.querySelector('#responseable-overlay-icon');
     if (iconContainer && runtime) {
         try {
-            const iconUrl = runtime.getURL('xrepl-light.png');
-            const iconImg = document.createElement('img');
-            iconImg.src = iconUrl;
-            iconImg.alt = 'xRepl.ai';
-            iconImg.style.cssText = 'width: 24px !important; height: 24px !important; display: inline-block !important; vertical-align: middle !important; object-fit: contain !important; flex-shrink: 0 !important;';
-            iconImg.addEventListener('error', (e) => {
-                console.error('Failed to load xrepl-light.png in overlay from:', iconImg.src);
-                iconImg.style.display = 'none';
+            const brandUrl = runtime.getURL('xReplAI-brandw.png');
+            const brandImg = document.createElement('img');
+            brandImg.src = brandUrl;
+            brandImg.alt = 'xReplAI';
+            brandImg.style.cssText = 'max-height: 36px !important; width: auto !important; display: block !important; object-fit: contain !important; flex-shrink: 0 !important;';
+            brandImg.addEventListener('error', (e) => {
+                console.error('Failed to load xReplAI-brandw.png in overlay from:', brandImg.src);
+                brandImg.style.display = 'none';
             });
-            iconContainer.appendChild(iconImg);
+            iconContainer.appendChild(brandImg);
         } catch (error) {
-            console.error('Error loading overlay icon:', error);
+            console.error('Error loading overlay brand image:', error);
         }
     }
 
