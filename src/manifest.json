@@ -1,5 +1,5 @@
 {
-  "manifest_version": 3.12,
+  "manifest_version": 3,
   "version": "1.0.10",
   "name": "xReplAI",
   "description": "Drafts that convert",

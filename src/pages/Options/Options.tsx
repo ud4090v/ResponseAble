@@ -388,7 +388,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     }
 
     try {
-      const response = await fetch(`${VERCEL_PROXY_URL}/usage`, {
+      const response = await fetch(`${VERCEL_PROXY_URL}/usage-info`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -913,22 +913,22 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                 Configure preferences for draft generation and email classification.
               </p>
 
-          <div className="SettingGroup">
+              <div className="SettingGroup">
             <label htmlFor="num-variants">Number of Variants:</label>
             <input
               id="num-variants"
               type="number"
               min="1"
-                  max={currentPlan?.maxVariants || 7}
+              max={currentPlan?.maxVariants || 7}
               value={config.numVariants}
               onChange={(e) => {
                 const value = parseInt(e.target.value, 10);
-                    const maxVariants = currentPlan?.maxVariants || 7;
-                    if (!isNaN(value) && value >= 1 && value <= maxVariants) {
+                const maxVariants = currentPlan?.maxVariants || 7;
+                if (!isNaN(value) && value >= 1 && value <= maxVariants) {
                   setConfig({ ...config, numVariants: value });
                 }
               }}
-              style={{ padding: '8px', fontSize: '14px', width: '100px' }}
+              className="SettingInputNumber"
             />
             <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
                   Number of response variants to generate (1-{currentPlan?.maxVariants || 7})
@@ -951,7 +951,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                       setConfig({ ...config, numGoals: value });
                     }
                   }}
-                  style={{ padding: '8px', fontSize: '14px', width: '100px' }}
+                  className="SettingInputNumber"
                 />
                 <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
                   Number of response goals to generate (1-{currentPlan?.maxGoals || 5})
@@ -974,13 +974,13 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                       setConfig({ ...config, numTones: value });
                     }
                   }}
-                  style={{ padding: '8px', fontSize: '14px', width: '100px' }}
+                  className="SettingInputNumber"
                 />
                 <p className="HelpText" style={{ marginTop: '4px', fontSize: '12px', color: '#5f6368' }}>
                   Number of tone options to generate (1-{currentPlan?.maxTones || 5})
                   {currentPlan && ` - Your ${currentPlan.name.charAt(0).toUpperCase() + currentPlan.name.slice(1)} plan allows up to ${currentPlan.maxTones} tones`}
-            </p>
-          </div>
+                </p>
+              </div>
 
               {/* Minimum Classification Confidence - Only show for plans with classificationConfidenceEnabled */}
               {currentPlan && currentPlan.classificationConfidenceEnabled && (
@@ -1080,70 +1080,60 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                       Max Goals: {currentPlan.maxGoals} | Max Variants: {currentPlan.maxVariants} | Max Tones: {currentPlan.maxTones} |
                       Generations: {currentPlan.maxGenerationsPerMonth === 999999999999 ? 'Unlimited' : currentPlan.maxGenerationsPerMonth}/month
                     </p>
+                    {/* Enable Overage Billing - only when user has valid license and plan */}
+                    <div className="SettingGroup" style={{ marginTop: '16px', marginBottom: '12px' }}>
+                      <label style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        cursor: overageLoading ? 'not-allowed' : 'pointer',
+                        padding: '12px',
+                        border: '1px solid #dadce0',
+                        borderRadius: '4px',
+                        backgroundColor: '#fff',
+                      }}>
+                        <input
+                          type="checkbox"
+                          checked={overageEnabled}
+                          onChange={(e) => updateOverageSetting(e.target.checked)}
+                          disabled={overageLoading}
+                          style={{
+                            width: '18px',
+                            height: '18px',
+                            cursor: overageLoading ? 'not-allowed' : 'pointer',
+                          }}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: '500', marginBottom: '4px', fontSize: '14px', color: '#202124' }}>
+                            Enable Overage Billing
+                          </div>
+                          <p className="HelpText" style={{ margin: 0, fontSize: '12px', color: '#5f6368' }}>
+                            {overageEnabled
+                              ? 'When enabled, you can exceed your monthly quota. Extra generations will be charged at your plan\'s overage rate at the end of the billing cycle.'
+                              : 'When disabled, generation will be blocked once you reach your monthly quota. Enable to allow overages with automatic billing.'}
+                          </p>
+                        </div>
+                      </label>
+                      {overageLoading && (
+                        <p className="HelpText" style={{ marginTop: '8px', fontSize: '12px', color: '#5f6368' }}>
+                          Updating...
+                        </p>
+                      )}
+                    </div>
                     <button
+                      type="button"
+                      className="SaveButton"
                       onClick={() => {
                         window.open('https://xrepl.ai/pricing', '_blank');
                       }}
-                      style={{
-                        marginTop: '12px',
-                        padding: '10px 24px',
-                        fontSize: '14px',
-                        fontWeight: '500',
-                        backgroundColor: '#5567b9',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        whiteSpace: 'nowrap',
-                      }}
+                      style={{ marginTop: '12px' }}
                     >
-                      Upgrade Plan
+                      View Plans
                     </button>
                   </div>
                   
                   {/* Usage Display */}
                   <UsageDisplay licenseKey={licenseKey} showUpgradeRecommendation={true} compact={false} />
-                  
-                  {/* Overage Toggle */}
-                  <div className="SettingGroup" style={{ marginTop: '24px' }}>
-                    <label style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '12px',
-                      cursor: 'pointer',
-                      padding: '12px',
-                      border: '1px solid #e0e0e0',
-                      borderRadius: '4px',
-                      backgroundColor: '#fff',
-                    }}>
-                      <input
-                        type="checkbox"
-                        checked={overageEnabled}
-                        onChange={(e) => updateOverageSetting(e.target.checked)}
-                        disabled={overageLoading}
-                        style={{
-                          width: '18px',
-                          height: '18px',
-                          cursor: overageLoading ? 'not-allowed' : 'pointer',
-                        }}
-                      />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: '500', marginBottom: '4px' }}>
-                          Enable Overage Billing
-                        </div>
-                        <p className="HelpText" style={{ margin: 0, fontSize: '12px', color: '#5f6368' }}>
-                          {overageEnabled 
-                            ? 'When enabled, you can exceed your monthly quota. Extra generations will be charged at your plan\'s overage rate at the end of the billing cycle.'
-                            : 'When disabled, generation will be blocked once you reach your monthly quota. Enable to allow overages with automatic billing.'}
-                        </p>
-                      </div>
-                    </label>
-                    {overageLoading && (
-                      <p className="HelpText" style={{ marginTop: '8px', fontSize: '12px', color: '#5f6368' }}>
-                        Updating...
-                      </p>
-                    )}
-                  </div>
                 </div>
               ) : (
                 <div className="SettingGroup">

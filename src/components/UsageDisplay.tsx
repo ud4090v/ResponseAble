@@ -75,7 +75,7 @@ const UsageDisplay: React.FC<UsageDisplayProps> = ({
 
     try {
       setLoading(true);
-      const response = await fetch(`${VERCEL_PROXY_URL}/usage`, {
+      const response = await fetch(`${VERCEL_PROXY_URL}/usage-info`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -295,16 +295,18 @@ const UsageDisplay: React.FC<UsageDisplayProps> = ({
             {upgradeRec.message}
           </div>
           <button
+            type="button"
             onClick={() => window.open(`https://xrepl.ai/pricing?license=${licenseKey}`, '_blank')}
             style={{
-              padding: '6px 12px',
-              fontSize: compact ? '11px' : '12px',
+              padding: '10px 24px',
+              fontSize: '14px',
               fontWeight: '500',
-              backgroundColor: '#2563eb',
+              backgroundColor: '#5567b9',
               color: '#fff',
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
+              whiteSpace: 'nowrap',
             }}
           >
             Upgrade to {upgradeRec.nextTier === 'pro_plus' ? 'Pro+' : upgradeRec.nextTier.charAt(0).toUpperCase() + upgradeRec.nextTier.slice(1)}

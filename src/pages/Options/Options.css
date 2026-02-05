@@ -72,6 +72,24 @@
   cursor: pointer;
 }
 
+/* Number inputs in Generation tab - same border/padding/radius as other inputs, fixed width */
+.SettingInputNumber {
+  width: 120px;
+  padding: 10px 12px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 14px;
+  color: #202124;
+  background: white;
+  box-sizing: border-box;
+}
+
+.SettingInputNumber:focus {
+  outline: none;
+  border-color: #1a73e8;
+  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.1);
+}
+
 .HelpText {
   margin-top: 6px;
   font-size: 12px;

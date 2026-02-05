@@ -119,7 +119,7 @@ const Popup = () => {
     }
     const fetchUsage = async () => {
       try {
-        const response = await fetch(`${VERCEL_PROXY_URL}/usage`, {
+        const response = await fetch(`${VERCEL_PROXY_URL}/usage-info`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ licenseKey }),

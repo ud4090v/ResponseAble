@@ -36,6 +36,10 @@ This boilerplate is heavily inspired by and adapted from [https://github.com/sam
 
 Please open up an issue to nudge me to keep the npm packages up-to-date. FYI, it takes time to make different packages with different versions work together nicely.
 
+## Documentation
+
+**xRepl.ai extension docs:** See **[docs/README.md](docs/README.md)** for the full index (specs, API calls, testing, reference). Obsolete/historical docs are in `docs/archive/`.
+
 ## Installing and Running
 
 ### Procedures:
