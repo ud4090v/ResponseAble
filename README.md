@@ -123,6 +123,19 @@ $ NODE_ENV=production npm run build
 
 Now, the content of `build` folder will be the extension ready to be submitted to the Chrome Web Store. Just take a look at the [official guide](https://developer.chrome.com/webstore/publish) to more infos about publishing.
 
+## Chrome Web Store submission checklist
+
+Before uploading to the [Chrome Web Store](https://chrome.google.com/webstore/devconsole):
+
+1. **Build:** Run `npm run build`. Upload a ZIP whose root contains the contents of the `build` folder (manifest.json, bundles, icons, HTML).
+2. **Icons:** The manifest includes 48px and 128px icons. Chrome requires 128px; 48px is recommended. Optional: add a 16px icon for the toolbar.
+3. **Privacy policy (required):** The extension uses storage (e.g. license key) and sends data to your API. You must provide a **privacy policy URL** in the Developer Dashboard describing what data is collected and how it is used.
+4. **Store listing:** In the dashboard, fill in: short and detailed description, category (e.g. Productivity), at least one screenshot (e.g. 1280×800), support link. Be accurate; avoid keyword spam.
+5. **Permission justifications:** For host permissions (Gmail, LinkedIn, API hosts), the store may ask for a short justification per permission (e.g. “Inject UI and read draft context”; “Send content for AI generation”).
+6. **Single purpose:** The extension’s purpose (AI-assisted email drafts) should be clear and match the description.
+
+See [Chrome Web Store Program Policies](https://developer.chrome.com/docs/webstore/program-policies) and [Publish](https://developer.chrome.com/docs/webstore/publish) for full requirements.
+
 ## Secrets
 
 If you are developing an extension that talks with some API you probably are using different keys for testing and production. Is a good practice you not commit your secret keys and expose to anyone that have access to the repository.

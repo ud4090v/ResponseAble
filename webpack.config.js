@@ -186,6 +186,11 @@ var options = {
       patterns: [
         {
           from: 'src/assets/img/xrepl48blue.png',
+          to: path.join(__dirname, 'build', 'icon-48.png'),
+          force: true,
+        },
+        {
+          from: 'src/assets/img/xrepl48blue.png',
           to: path.join(__dirname, 'build', 'xrepl-dark.png'),
           force: true,
         },
@@ -196,6 +201,15 @@ var options = {
         {
           from: 'src/assets/img/xrepl96light.png',
           to: path.join(__dirname, 'build', 'xrepl-light.png'),
+          force: true,
+        },
+      ],
+    }),
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: 'src/assets/img/xReplAI-brandw.png',
+          to: path.join(__dirname, 'build', 'xReplAI-brandw.png'),
           force: true,
         },
       ],

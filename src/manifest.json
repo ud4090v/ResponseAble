@@ -12,6 +12,7 @@
     "default_icon": "raicon.png"
   },
   "icons": {
+    "48": "icon-48.png",
     "128": "raicon.png"
   },
   "permissions": [
@@ -44,10 +45,12 @@
     {
       "resources": [
         "content.styles.css",
+        "icon-48.png",
         "icon-128.png",
         "xrepl-dark.png",
         "xrepl-light.png",
-        "raicon.png"
+        "raicon.png",
+        "xReplAI-brandw.png"
       ],
       "matches": [
         "http://*/*",

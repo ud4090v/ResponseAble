@@ -96,7 +96,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   useEffect(() => {
     // Get icon URL
     try {
-      const url = chrome.runtime.getURL('xrepl-light.png');
+      const url = chrome.runtime.getURL('xReplAI-brandw.png');
       setIconUrl(url);
     } catch (error) {
       console.error('Failed to get icon URL:', error);
@@ -719,14 +719,11 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           {iconUrl && (
             <img
               src={iconUrl}
-              alt="xRepl.ai"
-              className="OptionsPageTitleIcon"
+              alt="xReplAI"
+              className="OptionsPageTitleBrandImg"
             />
           )}
-          <span>
-            <span className="OptionsPageTitleBrand">xRepl.ai</span>
-            <span> - Settings</span>
-          </span>
+          <span className="OptionsPageTitleSub">Settings</span>
         </h1>
 
         {/* License Key Section - Always visible at top */}
