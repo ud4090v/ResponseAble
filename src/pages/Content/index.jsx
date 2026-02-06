@@ -62,8 +62,9 @@ const callNewStreamingAPI = async (url, body, onChunk = null, abortSignal = null
         } catch (e) {
             errorData = { error: { message: response.statusText } };
         }
-        const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
-        throw new Error(errorMessage);
+        // Use the API's error field directly (e.g. "Rate limit exceeded...")
+        const errorMessage = errorData.error || errorData.error?.message || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+        throw new Error(typeof errorMessage === 'string' ? errorMessage : `HTTP ${response.status}: ${response.statusText}`);
     }
 
     // Read the stream (Server-Sent Events format)
@@ -3291,6 +3292,8 @@ const injectGenerateButton = () => {
                     // If user cancelled, just silently stop - no error messages
                     if (err.name === 'AbortError' || newEmailAbortSignal.aborted) {
                         console.log('New email generation cancelled by user');
+                    } else if (isRateLimitError(err)) {
+                        showRateLimitPopup();
                     } else if (isLicenseError(err)) {
                         showLicenseRequiredPopup();
                     } else {
@@ -3380,6 +3383,8 @@ const injectGenerateButton = () => {
                 // If user cancelled, just silently stop - no error messages
                 if (err.name === 'AbortError' || replyAbortSignal.aborted) {
                     console.log('Reply generation cancelled by user');
+                } else if (isRateLimitError(err)) {
+                    showRateLimitPopup();
                 } else if (isLicenseError(err)) {
                     showLicenseRequiredPopup();
                 } else {
@@ -3964,6 +3969,12 @@ const REGISTER_URL = 'https://xrepl.ai/pricing';
 /**
  * Returns true if the error is due to missing/invalid license (403 or license message).
  */
+const isRateLimitError = (err) => {
+    if (!err) return false;
+    const msg = (err.message || err.toString() || '').toLowerCase();
+    return msg.includes('rate limit exceeded') || msg.includes('http 429') || msg.includes('429:');
+};
+
 const isLicenseError = (err) => {
     if (!err) return false;
     const msg = (err.message || err.toString() || '').toLowerCase();
@@ -4022,6 +4033,66 @@ const showLicenseRequiredPopup = () => {
     `;
     overlay.addEventListener('click', (e) => {
         if (e.target.id === 'responseable-license-close-btn') {
+            overlay.remove();
+        }
+    });
+    document.body.appendChild(overlay);
+};
+
+/**
+ * Show a styled popup when the user hits the TPM rate limit,
+ * offering them the choice to wait or upgrade their plan.
+ */
+const showRateLimitPopup = () => {
+    document.querySelector('.responseable-overlay.responseable-rate-limit-popup')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'responseable-overlay responseable-rate-limit-popup';
+    overlay.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 90%;
+        max-width: 420px;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+        z-index: 2147483647;
+        padding: 28px 24px;
+        font-family: Google Sans, Roboto, sans-serif;
+        text-align: center;
+    `;
+    overlay.innerHTML = `
+        <div style="font-size: 28px; margin-bottom: 12px;">⏱️</div>
+        <p style="margin: 0 0 8px; font-size: 17px; font-weight: 600; color: #202124;">Rate limit reached</p>
+        <p style="margin: 0 0 20px; font-size: 14px; color: #5f6368; line-height: 1.5;">
+            You're generating too fast for your current plan.<br>
+            Upgrade for higher speed limits, or wait a moment and try again.
+        </p>
+        <a href="${REGISTER_URL}" target="_blank" rel="noopener" id="responseable-rate-limit-upgrade-btn" style="
+            display: inline-block;
+            padding: 10px 24px;
+            background: #1a73e8;
+            color: white;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 14px;
+            margin-bottom: 12px;
+        ">Upgrade Plan</a>
+        <br>
+        <button type="button" id="responseable-rate-limit-close-btn" style="
+            padding: 8px 16px;
+            background: transparent;
+            border: 1px solid #dadce0;
+            border-radius: 8px;
+            color: #5f6368;
+            cursor: pointer;
+            font-size: 14px;
+        ">Close</button>
+    `;
+    overlay.addEventListener('click', (e) => {
+        if (e.target.id === 'responseable-rate-limit-close-btn') {
             overlay.remove();
         }
     });
@@ -5001,7 +5072,10 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                     );
                 } catch (err) {
                     console.error('Error generating drafts for goal:', err);
-                    if (isLicenseError(err)) {
+                    if (isRateLimitError(err)) {
+                        document.querySelector('.responseable-overlay')?.remove();
+                        showRateLimitPopup();
+                    } else if (isLicenseError(err)) {
                         document.querySelector('.responseable-overlay')?.remove();
                         showLicenseRequiredPopup();
                     } else {
@@ -5428,7 +5502,9 @@ const createCommentButtonHandler = (editor) => {
         } catch (err) {
             // Remove streaming overlay on error
             document.querySelector('.responseable-overlay.responseable-streaming')?.remove();
-            if (isLicenseError(err)) {
+            if (isRateLimitError(err)) {
+                showRateLimitPopup();
+            } else if (isLicenseError(err)) {
                 showLicenseRequiredPopup();
             } else {
                 alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
