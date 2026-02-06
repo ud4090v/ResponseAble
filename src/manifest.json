@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "version": "1.0.10",
   "name": "xReplAI",
-  "description": "AI-powered email draft generation for Gmail and LinkedIn. Get multi-variant replies with style mimicking, tone selection, and role-based content packages.",
+  "description": "AI-powered email draft generation for Gmail and LinkedIn. Multi-variant replies with style mimicking and tone selection.",
   "options_page": "options.html",
   "background": {
     "service_worker": "background.bundle.js"
