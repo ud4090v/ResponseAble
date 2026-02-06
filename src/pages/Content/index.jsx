@@ -311,6 +311,7 @@ let packagesLoadPromise = null;
 const FALLBACK_GENERIC_PACKAGE = {
     name: 'generic',
     base: true,
+    title: 'General',
     description: 'general professional emails not fitting specific categories',
     intent: 'general inquiry or communication',
     userIntent: 'I am writing a general professional email',
@@ -762,11 +763,12 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
         }
 
         const packageName = matchedType.name;
+        const packageTitle = matchedType.title || packageName;
         const typeIntent = matchedType.intent;
 
         // Report type determination progress
         if (onProgress) {
-            onProgress({ step: 'type', data: { type: packageName, confidence: typeMatchResult.confidence } });
+            onProgress({ step: 'type', data: { type: packageName, title: packageTitle, confidence: typeMatchResult.confidence } });
         }
 
         // ============================================================================
@@ -3041,7 +3043,7 @@ const injectGenerateButton = () => {
                 // Progress callback to update the overlay as each step completes
                 const onProgress = (progress) => {
                     if (progress.step === 'type') {
-                        updateProgressStep('step-type', 'completed', formatTypeResult(progress.data.type));
+                        updateProgressStep('step-type', 'completed', formatTypeResult(progress.data.title || progress.data.type));
                         updateProgressStep('step-goals', 'active');
                     } else if (progress.step === 'goals') {
                         updateProgressStep('step-goals', 'completed', formatGoalsResult(progress.data.response_goals, progress.data.goal_titles));
@@ -3329,7 +3331,7 @@ const injectGenerateButton = () => {
             // Progress callback to update the overlay as each step completes
             const onProgress = (progress) => {
                 if (progress.step === 'type') {
-                    updateProgressStep('step-type', 'completed', formatTypeResult(progress.data.type));
+                    updateProgressStep('step-type', 'completed', formatTypeResult(progress.data.title || progress.data.type));
                     updateProgressStep('step-goals', 'active');
                 } else if (progress.step === 'goals') {
                     updateProgressStep('step-goals', 'completed', formatGoalsResult(progress.data.response_goals, progress.data.goal_titles));
@@ -4696,8 +4698,11 @@ const updateProgressStep = (stepId, status, result = null) => {
 };
 
 // Format type result for display
-const formatTypeResult = (typeName) => {
-    const displayName = typeName.charAt(0).toUpperCase() + typeName.slice(1);
+const formatTypeResult = (typeLabel) => {
+    // typeLabel is the package title (e.g. "Sales Professional") or fallback name
+    const displayName = typeLabel.includes('_')
+        ? typeLabel.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+        : typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1);
     return `Semantic context: <span class="responseable-step-result-value">${displayName}</span>`;
 };
 
