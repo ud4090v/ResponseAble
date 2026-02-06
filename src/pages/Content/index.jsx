@@ -630,7 +630,7 @@ const getCompactPackageInfo = (pkg) => {
 
 // Email classification function - uses AI to classify email type and extract entities
 // onProgress callback is called with { step: 'type'|'goals'|'tone', data: {...} } as each step completes
-const classifyEmail = async (richContext, sourceMessageText, platform, threadHistory = '', senderName = null, onProgress = null) => {
+const classifyEmail = async (richContext, sourceMessageText, platform, threadHistory = '', senderName = null, onProgress = null, abortSignal = null) => {
     try {
         await loadApiConfig();
 
@@ -714,7 +714,8 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
                     confidenceThreshold: apiConfig.classificationConfidenceThreshold !== undefined ? apiConfig.classificationConfidenceThreshold : 0.85,
                     provider: apiConfig.provider,
                     model: classificationModel
-                })
+                }),
+                signal: abortSignal
             });
 
             if (!response.ok) {
@@ -724,6 +725,7 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
 
             typeMatchResult = await response.json();
         } catch (typeError) {
+            if (typeError.name === 'AbortError') throw typeError;
             console.error('Type determination error:', typeError);
             // Fallback to base package type
             typeMatchResult = {
@@ -796,7 +798,8 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
                         numVariants: numVariants,
                         provider: apiConfig.provider,
                         model: classificationModel
-                    })
+                    }),
+                    signal: abortSignal
                 });
 
                 if (!response.ok) {
@@ -818,6 +821,7 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
                     key_topics: genericGoalsResult.key_topics || []
                 };
             } catch (genericError) {
+                if (genericError.name === 'AbortError') throw genericError;
                 console.error('Generic goals determination error:', genericError);
                 // Fallback with generic values
                 intentGoalsResult = {
@@ -908,7 +912,8 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
                         numVariants: numVariants,
                         provider: apiConfig.provider,
                         model: classificationModel
-                    })
+                    }),
+                    signal: abortSignal
                 });
 
                 if (!response.ok) {
@@ -918,6 +923,7 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
 
                 intentGoalsResult = await response.json();
             } catch (intentError) {
+                if (intentError.name === 'AbortError') throw intentError;
                 console.error('Intent/Goals determination error:', intentError);
                 // Fallback with generic values
                 intentGoalsResult = {
@@ -976,7 +982,8 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
                     numTones: apiConfig.numTones || 3,
                     provider: apiConfig.provider,
                     model: classificationModel
-                })
+                }),
+                signal: abortSignal
             });
 
             if (!response.ok) {
@@ -1026,6 +1033,7 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
                 });
             }
         } catch (toneError) {
+            if (toneError.name === 'AbortError') throw toneError;
             console.error('Tone determination error:', toneError);
             // Fallback with professional tone
             toneResult = {
@@ -1441,6 +1449,8 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
             }
         }
     } catch (error) {
+        // If user cancelled, propagate the abort so the calling flow stops
+        if (error.name === 'AbortError') throw error;
         const errorMessage = error?.message || String(error) || 'Unknown error';
         console.warn('Email classification error:', JSON.stringify({
             message: errorMessage,
@@ -2918,8 +2928,12 @@ const injectGenerateButton = () => {
             // Forward is treated as New Email with forwarded message as context
             if (isForward || !isReply) {
                 // NEW EMAIL: Extract compose window content and generate drafts
+                // Create AbortController so cancelling the progress overlay aborts in-flight requests
+                const newEmailAbortController = new AbortController();
+                const newEmailAbortSignal = newEmailAbortController.signal;
+
                 // Show progress overlay immediately for instant feedback
-                showProgressOverlay();
+                showProgressOverlay(() => newEmailAbortController.abort());
 
                 // Validate license once and cache for this flow (avoids extra /validate before generation)
                 await getCachedOrValidateLicense();
@@ -3064,7 +3078,8 @@ const injectGenerateButton = () => {
                                 confidenceThreshold: apiConfig.classificationConfidenceThreshold !== undefined ? apiConfig.classificationConfidenceThreshold : 0.85,
                                 provider: apiConfig.provider,
                                 model: classificationModel
-                            })
+                            }),
+                            signal: newEmailAbortSignal
                         });
 
                         if (!response.ok) {
@@ -3112,6 +3127,7 @@ const injectGenerateButton = () => {
                             });
                         }
                     } catch (typeError) {
+                        if (typeError.name === 'AbortError') throw typeError;
                         console.error('Error determining type from content:', typeError);
                         // Fallback to default role
                         selectedRole = defaultRole;
@@ -3202,7 +3218,8 @@ const injectGenerateButton = () => {
                                 const classification = classificationOrPartial;
 
                                 await showDraftsOverlay(draftsText, context, platform, adapter, classification, newEmailRegenerateContext, newEmailParams);
-                            }
+                            },
+                            newEmailAbortSignal
                         );
                     } else {
                         // Use normal flow with determined/default role
@@ -3264,13 +3281,17 @@ const injectGenerateButton = () => {
 
                                 await showDraftsOverlay(draftsText, context, platform, adapter, classification, newEmailRegenerateContext, newEmailParams);
                             },
-                            onProgress
+                            onProgress,
+                            newEmailAbortSignal
                         );
                     }
                 } catch (err) {
                     // Remove progress overlay on error
                     document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
-                    if (isLicenseError(err)) {
+                    // If user cancelled, just silently stop - no error messages
+                    if (err.name === 'AbortError' || newEmailAbortSignal.aborted) {
+                        console.log('New email generation cancelled by user');
+                    } else if (isLicenseError(err)) {
                         showLicenseRequiredPopup();
                     } else {
                         alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
@@ -3284,8 +3305,12 @@ const injectGenerateButton = () => {
             }
 
             // REPLY: Use classification flow with immediate progress overlay
+            // Create AbortController so cancelling the progress overlay aborts in-flight requests
+            const replyAbortController = new AbortController();
+            const replyAbortSignal = replyAbortController.signal;
+
             // Show progress overlay immediately for instant feedback
-            showProgressOverlay();
+            showProgressOverlay(() => replyAbortController.abort());
 
             // Validate license once and cache for this flow (avoids extra /validate before generation)
             await getCachedOrValidateLicense();
@@ -3308,28 +3333,27 @@ const injectGenerateButton = () => {
                 }
             };
 
-            // Classify email with progress updates
-            const classification = await classifyEmail(richContext, sourceMessageText, platform, threadHistoryText, senderName, onProgress);
-
-            // Store context needed for regeneration
-            // threadHistory excludes the email being replied to (for context only)
-            const regenerateContext = {
-                richContext,
-                sourceMessageText,  // The actual email being replied to
-                threadHistory: threadHistoryText,  // All other emails in thread (context only)
-                context,
-                senderName,
-                senderEmail: actualSenderEmail,  // Sender email from emailDetails
-                emailSubject: emailSubject,  // Subject of the email being replied to
-                toRecipients: toRecipients,  // To recipients
-                ccRecipients: ccRecipients,  // CC recipients
-                emailDetails: emailDetails,  // Full email details (subject, senderName, senderEmail, body, to, cc)
-                recipientName,
-                recipientCompany
-            };
-
             // Generate drafts with the classified tone
             try {
+                // Classify email with progress updates
+                const classification = await classifyEmail(richContext, sourceMessageText, platform, threadHistoryText, senderName, onProgress, replyAbortSignal);
+
+                // Store context needed for regeneration
+                // threadHistory excludes the email being replied to (for context only)
+                const regenerateContext = {
+                    richContext,
+                    sourceMessageText,  // The actual email being replied to
+                    threadHistory: threadHistoryText,  // All other emails in thread (context only)
+                    context,
+                    senderName,
+                    senderEmail: actualSenderEmail,  // Sender email from emailDetails
+                    emailSubject: emailSubject,  // Subject of the email being replied to
+                    toRecipients: toRecipients,  // To recipients
+                    ccRecipients: ccRecipients,  // CC recipients
+                    emailDetails: emailDetails,  // Full email details (subject, senderName, senderEmail, body, to, cc)
+                    recipientName,
+                    recipientCompany
+                };
                 await generateDraftsWithTone(
                     richContext,
                     sourceMessageText,
@@ -3347,12 +3371,16 @@ const injectGenerateButton = () => {
                         }
                         await showDraftsOverlay(draftsText, context, platform, null, classification, regenerateContext, null, isPartial);
                     },
-                    regenerateContext  // Pass regenerateContext so function can access threadHistory
+                    regenerateContext,  // Pass regenerateContext so function can access threadHistory
+                    replyAbortSignal
                 );
             } catch (err) {
                 // Remove progress overlay on error
                 document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
-                if (isLicenseError(err)) {
+                // If user cancelled, just silently stop - no error messages
+                if (err.name === 'AbortError' || replyAbortSignal.aborted) {
+                    console.log('Reply generation cancelled by user');
+                } else if (isLicenseError(err)) {
                     showLicenseRequiredPopup();
                 } else {
                     alert(`${apiConfig.provider} API error: ${err.message}\nCheck API key and network.`);
@@ -3388,7 +3416,7 @@ const injectGenerateButton = () => {
 // Simple overlay to show drafts
 // Function to generate drafts with a specific tone
 // Generate single base package draft based on typed content (when type doesn't match user packages)
-const generateGenericSingleDraft = async (richContext, platform, subject, recipient, bodyText, recipientName, recipientCompany, adapter, userAccountName = '', userAccountEmail = '', onComplete = null) => {
+const generateGenericSingleDraft = async (richContext, platform, subject, recipient, bodyText, recipientName, recipientCompany, adapter, userAccountName = '', userAccountEmail = '', onComplete = null, abortSignal = null) => {
     try {
         await loadApiConfig();
 
@@ -3438,7 +3466,8 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
                     if (onComplete) {
                         onComplete(fullContent, true); // true = isPartial
                     }
-                }
+                },
+                abortSignal
             );
         } catch (fetchError) {
             // Handle network errors (CORS, connection issues, etc.)
@@ -3526,7 +3555,8 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
                         numTones: apiConfig.numTones || 3,
                         provider: apiConfig.provider,
                         model: classificationModel
-                    })
+                    }),
+                    signal: abortSignal
                 });
 
                 if (!response.ok) {
@@ -3551,6 +3581,7 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
                     toneResult.tone_sets[goal] = defaultTones.slice(0, apiConfig.numTones || 3);
                 }
             } catch (toneError) {
+                if (toneError.name === 'AbortError') throw toneError;
                 console.error('Tone determination error for generic draft:', toneError);
                 // Use defaults
                 toneResult.tone_sets[goal] = defaultTones.slice(0, apiConfig.numTones || 3);
@@ -3616,7 +3647,7 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
 };
 
 // Generate drafts for new emails (mimics reply generation flow)
-const generateDraftsForNewEmail = async (richContext, platform, selectedRole, recipientName, recipientCompany, adapter, userAccountName = '', userAccountEmail = '', composeSubject = '', composeBodyText = '', composeRecipient = '', onComplete, onProgress = null) => {
+const generateDraftsForNewEmail = async (richContext, platform, selectedRole, recipientName, recipientCompany, adapter, userAccountName = '', userAccountEmail = '', composeSubject = '', composeBodyText = '', composeRecipient = '', onComplete, onProgress = null, abortSignal = null) => {
     try {
         await loadApiConfig();
         const numVariants = apiConfig.numVariants || 4;
@@ -3672,7 +3703,8 @@ Email body: ${composeBodyText || '(not provided)'}`
                     numVariants: numVariants,
                     provider: apiConfig.provider,
                     model: classificationModel
-                })
+                }),
+                signal: abortSignal
             });
 
             if (!response.ok) {
@@ -3682,6 +3714,7 @@ Email body: ${composeBodyText || '(not provided)'}`
 
             intentGoalsResult = await response.json();
         } catch (goalsError) {
+            if (goalsError.name === 'AbortError') throw goalsError;
             console.error('Goals determination error:', goalsError);
             // Fallback with generic values
             intentGoalsResult = {
@@ -3786,7 +3819,8 @@ Email body: ${composeBodyText || '(not provided)'}`
                     numTones: apiConfig.numTones || 3,
                     provider: apiConfig.provider,
                     model: classificationModel
-                })
+                }),
+                signal: abortSignal
             });
 
             if (!response.ok) {
@@ -3836,6 +3870,7 @@ Email body: ${composeBodyText || '(not provided)'}`
                 });
             }
         } catch (toneError) {
+            if (toneError.name === 'AbortError') throw toneError;
             console.error('Tone determination error:', toneError);
             // Fallback
             toneResult = {
@@ -3915,7 +3950,8 @@ Email body: ${composeBodyText || '(not provided)'}`
                     }
                 }
             },
-            null // No regenerateContext for new emails
+            null, // No regenerateContext for new emails
+            abortSignal
         );
     } catch (error) {
         console.error('Error generating drafts for new email:', error);
@@ -4066,7 +4102,7 @@ const getCachedOrValidateLicense = async () => {
     return validation;
 };
 
-const generateDraftsWithTone = async (richContext, sourceMessageText, platform, classification, selectedTone, senderName, recipientName, recipientCompany, adapter, onComplete, regenerateContext = null) => {
+const generateDraftsWithTone = async (richContext, sourceMessageText, platform, classification, selectedTone, senderName, recipientName, recipientCompany, adapter, onComplete, regenerateContext = null, abortSignal = null) => {
     try {
         await loadApiConfig();
 
@@ -4167,7 +4203,8 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
                         if (onComplete) {
                             onComplete(fullContent, true); // true = isPartial
                         }
-                    }
+                    },
+                    abortSignal
                 );
             } else {
                 // Reply draft - use generate-drafts-reply endpoint
@@ -4198,7 +4235,8 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
                         if (onComplete) {
                             onComplete(fullContent, true); // true = isPartial
                         }
-                    }
+                    },
+                    abortSignal
                 );
             }
         } catch (fetchError) {
@@ -4360,7 +4398,7 @@ const updateStreamingOverlay = (content) => {
 
 // Show progress overlay immediately when user clicks the button
 // This provides instant feedback while analysis steps complete
-const showProgressOverlay = () => {
+const showProgressOverlay = (onCancel = null) => {
     // Remove any existing overlay
     document.querySelector('.responseable-overlay')?.remove();
 
@@ -4462,14 +4500,16 @@ const showProgressOverlay = () => {
 
     document.body.appendChild(overlay);
 
-    // Add close button handler
+    // Add close button handler - call onCancel so the running flow is aborted
     overlay.querySelector('.responseable-close-btn').addEventListener('click', () => {
+        if (onCancel) onCancel();
         overlay.remove();
     });
 
     // Close on escape key
     const escHandler = (e) => {
         if (e.key === 'Escape') {
+            if (onCancel) onCancel();
             overlay.remove();
             document.removeEventListener('keydown', escHandler);
         }
