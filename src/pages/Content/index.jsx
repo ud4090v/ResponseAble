@@ -4450,7 +4450,7 @@ const showProgressOverlay = (onCancel = null) => {
         </style>
         <div style="display: flex; align-items: center; margin-bottom: 20px;">
             <h2 style="margin: 0; font-size: 18px; font-weight: 500; display: flex; align-items: center; gap: 8px;">
-                ${brandUrl ? `<img src="${brandUrl}" alt="xReplAI" style="width: 24px; height: 24px; object-fit: contain; animation: responseable-pulse 2s ease-in-out infinite;" onerror="this.style.display='none'; var s=this.nextElementSibling; if(s) s.style.display='inline';">
+                ${brandUrl ? `<img src="${brandUrl}" alt="xReplAI" style="max-height: 24px; width: auto; object-fit: contain; animation: responseable-pulse 2s ease-in-out infinite;" onerror="this.style.display='none'; var s=this.nextElementSibling; if(s) s.style.display='inline';">
                 <span style="display:none; color: #5567b9;">xRepl.ai</span>` : '<span style="color: #5567b9;">xRepl.ai</span>'}
                 <span style="color: #9b9fa8;"> - Analyzing Email</span>
             </h2>
