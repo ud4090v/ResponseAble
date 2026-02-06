@@ -1,12 +1,9 @@
 {
-  "name": "chrome-extension-boilerplate-react",
-  "version": "5.0.4",
-  "description": "ResponseAble: AI Sales email Drafter",
+  "name": "xreplai-extension",
+  "version": "1.0.10",
+  "description": "xReplAI - AI-powered email draft generation for Gmail and LinkedIn",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/lxieyang/chrome-extension-boilerplate-react.git"
-  },
+  "homepage": "https://xrepl.app",
   "scripts": {
     "build": "node utils/build.js",
     "start": "node utils/webserver.js",

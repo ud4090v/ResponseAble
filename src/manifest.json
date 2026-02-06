@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "version": "1.0.10",
   "name": "xReplAI",
-  "description": "Drafts that convert",
+  "description": "AI-powered email draft generation for Gmail and LinkedIn. Get multi-variant replies with style mimicking, tone selection, and role-based content packages.",
   "options_page": "options.html",
   "background": {
     "service_worker": "background.bundle.js"
@@ -19,18 +19,13 @@
     "storage"
   ],
   "host_permissions": [
-    "https://mail.google.com/*",
-    "https://www.linkedin.com/*",
-    "https://api.x.ai/*",
-    "https://api.openai.com/*"
+    "https://xrepl.app/*"
   ],
   "content_scripts": [
     {
       "matches": [
-        "http://*/*",
-        "https://*/*",
-        "<all_urls>",
-        "https://mail.google.com/*"
+        "https://mail.google.com/*",
+        "https://www.linkedin.com/*"
       ],
       "js": [
         "contentScript.bundle.js"
@@ -53,9 +48,8 @@
         "xReplAI-brandw.png"
       ],
       "matches": [
-        "http://*/*",
-        "https://*/*",
-        "<all_urls>"
+        "https://mail.google.com/*",
+        "https://www.linkedin.com/*"
       ]
     }
   ]
