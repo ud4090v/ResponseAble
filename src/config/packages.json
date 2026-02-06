@@ -6,7 +6,8 @@
         "intent": "The sender is either: (1) selling a product or service to the recipient (sales rep/seller perspective), or (2) inquiring about, negotiating, or following up on a product or service purchase (customer/buyer perspective). Consider their approach: selling side - cold outreach, follow-up, offering discount, value proposition, or closing; buying side - product inquiry, price negotiation, deal follow-up, contract questions, or purchase decision. IMPORTANT: This does NOT include job positions, employment opportunities, recruitment, hiring, or staffing - those are separate categories.",
         "userIntent": "I am engaging in a sales-related conversation, either as a seller reaching out to prospects to generate interest and drive deals, or as a customer inquiring about products/services, negotiating terms, following up on deals, or making purchase decisions.",
         "roleDescription": "a professional sales or procurement email writer",
-        "contextSpecific": "If the sender is selling: respond as a potential customer evaluating the offer. Consider: pricing, value proposition, fit with your needs, and next steps. Use variants that match your interest level and decision-making stage. If the sender is a customer inquiring: respond as the seller/vendor. Consider: addressing their questions, providing information, negotiating terms, and guiding them toward a purchase decision. NOTE: This context is for product/service sales only - NOT for job opportunities or employment offers."
+        "contextSpecific": "If the sender is selling: respond as a potential customer evaluating the offer. Consider: pricing, value proposition, fit with your needs, and next steps. Use variants that match your interest level and decision-making stage. If the sender is a customer inquiring: respond as the seller/vendor. Consider: addressing their questions, providing information, negotiating terms, and guiding them toward a purchase decision. NOTE: This context is for product/service sales only - NOT for job opportunities or employment offers.",
+        "replyTrigger": "Incoming email is from a prospect, lead, or existing customer asking about products or services, requesting pricing, negotiating a deal, following up on a proposal, or expressing interest in purchasing. Also matches when a sales representative is pitching, following up, or offering a deal to the user."
     },
     {
         "name": "recruitment",
@@ -15,7 +16,8 @@
         "intent": "The sender is a job seeker applying to or following up with the recipient. Consider their intent: expressing interest in a role, attaching resume, requesting interview, thanking after meeting, or seeking referrals.",
         "userIntent": "I am reaching out to a potential candidate to introduce an opportunity, gauge interest, or progress the hiring process, aiming to attract and secure top talent.",
         "roleDescription": "a hiring manager or recruiter responding to a job application",
-        "contextSpecific": "The sender is applying for a position. Respond as the recipient (hiring manager/recruiter). Consider: candidate qualifications, fit with role requirements, next steps in hiring process, and providing constructive feedback if declining."
+        "contextSpecific": "The sender is applying for a position. Respond as the recipient (hiring manager/recruiter). Consider: candidate qualifications, fit with role requirements, next steps in hiring process, and providing constructive feedback if declining.",
+        "replyTrigger": "Incoming email is from a job applicant or candidate applying for a role, submitting a resume or cover letter, following up on an application, thanking after an interview, or asking about a position the user is hiring for."
     },
     {
         "name": "jobseeker",
@@ -24,7 +26,8 @@
         "intent": "The sender is a recruiter offering a job position or opportunity to the recipient. Consider what they're offering: specific role details, interview invitation, salary range, company culture fit, or next steps in hiring process.",
         "userIntent": "I am initiating contact with a potential employer or contact to express interest in a role, showcase my qualifications, or follow up on an application, with the goal of advancing my job search.",
         "roleDescription": "a professional candidate responding to a recruiter's job offer",
-        "contextSpecific": "The sender is a recruiter or hiring manager offering a job position to you. Respond as the recipient (candidate). Consider: your interest in the role, questions about the position/company/compensation, expressing interest or declining, and next steps in your application process."
+        "contextSpecific": "The sender is a recruiter or hiring manager offering a job position to you. Respond as the recipient (candidate). Consider: your interest in the role, questions about the position/company/compensation, expressing interest or declining, and next steps in your application process.",
+        "replyTrigger": "Incoming email is from a recruiter, hiring manager, or HR professional reaching out about a job opportunity, inviting to interview, discussing a position, extending an offer, or following up on the hiring process."
     },
     {
         "name": "support",
@@ -33,7 +36,8 @@
         "intent": "The sender is either: (1) seeking help or reporting an issue to the recipient (customer perspective), or (2) providing support, assistance, or resolution to the recipient (support desk perspective). Consider the problem: technical bug, billing inquiry, feature request, service complaint, or follow-up, and urgency level.",
         "userIntent": "I am contacting support to report an issue, request assistance, or seek resolution, aiming to get quick, helpful guidance while maintaining a professional tone.",
         "roleDescription": "a professional customer support specialist or customer seeking support",
-        "contextSpecific": "If the sender is a customer: respond as the support desk - address their concern professionally and helpfully. Consider: urgency, impact, resolution options, escalation needs, and customer satisfaction. Provide clear next steps and timelines. If the sender is support: respond as the customer - acknowledge the response, ask clarifying questions if needed, provide additional information, or confirm resolution."
+        "contextSpecific": "If the sender is a customer: respond as the support desk - address their concern professionally and helpfully. Consider: urgency, impact, resolution options, escalation needs, and customer satisfaction. Provide clear next steps and timelines. If the sender is support: respond as the customer - acknowledge the response, ask clarifying questions if needed, provide additional information, or confirm resolution.",
+        "replyTrigger": "Incoming email is from a customer reporting an issue, requesting help or troubleshooting, filing a complaint, asking about billing, or following up on a support ticket. Also matches when a support agent is responding with a resolution, update, or follow-up."
     },
     {
         "name": "networking",
@@ -42,7 +46,8 @@
         "intent": "The sender is building or maintaining a professional relationship with the recipient. Consider the goal: warm introduction, referral request, collaboration proposal, or staying in touch after event.",
         "userIntent": "I am reaching out to a professional contact to build rapport, seek advice, request a referral, or propose collaboration, with the aim of expanding my network.",
         "roleDescription": "a professional building genuine connections",
-        "contextSpecific": "Build a meaningful professional relationship. Consider: mutual value, relationship building, reciprocity, and long-term connection. Keep it professional, warm, and relationship-focused."
+        "contextSpecific": "Build a meaningful professional relationship. Consider: mutual value, relationship building, reciprocity, and long-term connection. Keep it professional, warm, and relationship-focused.",
+        "replyTrigger": "Incoming email is from a professional contact reaching out for an introduction, referral, collaboration proposal, event follow-up, or general relationship-building and networking purposes."
     },
     {
         "name": "generic",
@@ -51,6 +56,7 @@
         "intent": "The sender has a neutral professional intent toward the recipient. Consider basic goals like information sharing, scheduling, or simple acknowledgments without strong sales/hiring/support elements.",
         "userIntent": "I am sending a general professional email to share information, schedule a meeting, or acknowledge something, without a specific sales, hiring, or support agenda.",
         "roleDescription": "a professional email reply writer",
-        "contextSpecific": "Carefully analyze the source email to understand the context, relationship, and intent. Respond appropriately from the recipient's perspective, considering the specific situation and relationship dynamics."
+        "contextSpecific": "Carefully analyze the source email to understand the context, relationship, and intent. Respond appropriately from the recipient's perspective, considering the specific situation and relationship dynamics.",
+        "replyTrigger": "Incoming email is a general professional message that does not clearly fit sales, recruitment, job seeking, support, or networking categories."
     }
 ]
