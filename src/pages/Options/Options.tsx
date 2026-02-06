@@ -8,7 +8,7 @@ interface Props {
 }
 
 interface ApiConfig {
-  provider: 'openai' | 'grok';
+  provider: string;
   model: string;
   numVariants: number;
   numGoals: number;
@@ -45,17 +45,17 @@ interface SubscriptionPlan {
 
 // Plans will be loaded from API
 
-const API_PROVIDERS = {
-  openai: {
-    name: 'OpenAI',
-    endpoint: 'https://api.openai.com/v1/chat/completions',
-    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-  },
-  grok: {
-    name: 'Grok (xAI)',
-    endpoint: 'https://api.x.ai/v1/chat/completions',
-    models: ['grok-2-vision-1212', 'grok-2-1212', 'grok-beta', 'grok-4-latest', 'grok-4-fast'],
-  },
+// Display names for known providers (used for dropdown labels only)
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  openai: 'OpenAI',
+  grok: 'Grok (xAI)',
+  claude: 'Claude (Anthropic)',
+  anthropic: 'Claude (Anthropic)',
+};
+
+// Helper to get a display name for a provider code
+const getProviderDisplayName = (code: string): string => {
+  return PROVIDER_DISPLAY_NAMES[code] || code.charAt(0).toUpperCase() + code.slice(1);
 };
 
 const Options: React.FC<Props> = ({ title }: Props) => {
@@ -133,7 +133,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       setSubscriptionPlan(loadedPlan);
 
       setConfig({
-        provider: (result.apiProvider as ApiConfig['provider']) || 'grok',
+        provider: result.apiProvider || 'grok',
         model: result.apiModel || 'grok-4-latest',
         numVariants: result.numVariants || 4,
         numGoals: result.numGoals || 3,
@@ -556,8 +556,8 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     // Check provider
     if (!newPlan.availableProviders.includes(config.provider)) {
       // Provider not available in new plan, reset to first available
-      const firstProvider = newPlan.availableProviders[0] as ApiConfig['provider'];
-      const firstModel = newPlan.availableModels[firstProvider]?.[0] || 'gpt-4o-mini';
+      const firstProvider = newPlan.availableProviders[0] || 'grok';
+      const firstModel = newPlan.availableModels[firstProvider]?.[0] || '';
       updatedConfig.provider = firstProvider;
       updatedConfig.model = firstModel;
     } else {
@@ -565,7 +565,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
       const availableModels = newPlan.availableModels[config.provider] || [];
       if (!availableModels.includes(config.model)) {
         // Model not available, reset to first available model for provider
-        const firstModel = availableModels[0] || 'gpt-4o-mini';
+        const firstModel = availableModels[0] || '';
         updatedConfig.model = firstModel;
       }
     }
@@ -608,8 +608,8 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     }
 
     // Get available models for the provider from current plan
-    const availableModels = currentPlan?.availableModels[provider] || API_PROVIDERS[provider].models;
-    const firstModel = availableModels[0] || API_PROVIDERS[provider].models[0];
+    const availableModels = currentPlan?.availableModels[provider] || [];
+    const firstModel = availableModels[0] || '';
 
     setConfig({
       ...config,
@@ -682,18 +682,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
 
   const currentPlan = getCurrentPlan();
   const availableProvidersForPlan = currentPlan?.availableProviders || ['openai', 'grok'];
-  const availableModelsForProvider = currentPlan?.availableModels[config.provider] || API_PROVIDERS[config.provider].models;
-
-  // Filter providers and models based on subscription plan
-  const filteredProviders = Object.entries(API_PROVIDERS).filter(([key]) =>
-    availableProvidersForPlan.includes(key)
-  );
-  const currentProviderConfig = {
-    ...API_PROVIDERS[config.provider],
-    models: availableModelsForProvider.filter(model =>
-      availableModelsForProvider.includes(model)
-    ),
-  };
+  const availableModelsForProvider = currentPlan?.availableModels[config.provider] || [];
 
   // Show Default Role tab if user has multiple packages OR has at least one non-generic package
   const hasNonGenericPackages = selectedPackages.some(pkg => pkg !== 'generic');
@@ -854,11 +843,11 @@ const Options: React.FC<Props> = ({ title }: Props) => {
             <select
               id="api-provider"
               value={config.provider}
-              onChange={(e) => handleProviderChange(e.target.value as ApiConfig['provider'])}
+              onChange={(e) => handleProviderChange(e.target.value)}
             >
-                  {filteredProviders.map(([key, value]) => (
-                <option key={key} value={key}>
-                  {value.name}
+                  {availableProvidersForPlan.map((providerCode: string) => (
+                <option key={providerCode} value={providerCode}>
+                  {getProviderDisplayName(providerCode)}
                 </option>
               ))}
             </select>
@@ -876,7 +865,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                     }
                   }}
             >
-              {currentProviderConfig.models.map((model) => (
+              {availableModelsForProvider.map((model: string) => (
                 <option key={model} value={model}>
                   {model}
                 </option>
