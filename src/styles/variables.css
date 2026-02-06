@@ -1,28 +1,28 @@
 /**
  * Shared design tokens for xRepl extension.
- * Use these in page/component CSS to keep styles consistent.
+ * Aligned with xreplaisite brand system.
  */
 :root {
   /* Colors - text */
-  --color-text: #202124;
-  --color-text-muted: #5f6368;
+  --color-text: #030213;
+  --color-text-muted: #717182;
 
   /* Colors - primary / brand */
   --color-primary: #1e3a8a;
   --color-primary-hover: #1e40af;
-  --color-primary-light: #3b82f6;
-  --color-primary-button: #5567b9;
+  --color-primary-light: #60A5FA;
+  --color-accent: #1e3a8a;           /* text accent: primary in light, bright blue in dark */
   --color-primary-badge-bg: #e0e7ff;
   --color-primary-hover-bg: #eff6ff;
-  --color-primary-button-hover: #4556a8;
-  --color-primary-button-active: #3d4a96;
-  --color-link: #1967d2;
+  --color-link: #1e3a8a;
 
   /* Colors - UI */
-  --color-border: #dadce0;
+  --color-border: rgba(0, 0, 0, 0.1);
   --color-border-light: #e5e7eb;
-  --color-bg-subtle: #f8f9fa;
-  --color-bg-card: #fff;
+  --color-bg-subtle: #f3f3f5;
+  --color-bg-card: #ffffff;
+  --color-bg-page: #ffffff;
+  --color-input-bg: #f3f3f5;
 
   /* Colors - feedback */
   --color-success: #34a853;
@@ -52,7 +52,7 @@
   --color-license-loading-bg: #e8f0fe;
 
   /* Panel dark theme */
-  --color-panel-bg: #242424;
+  --color-panel-bg: #0A1628;
   --color-panel-text: #ffffff;
 
   /* Typography */
@@ -61,11 +61,66 @@
   --font-mono: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
 
   /* Spacing / radius */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
   --input-padding: 10px 12px;
-  --input-border: 1px solid var(--color-border);
-  --focus-ring: 0 0 0 2px rgba(26, 115, 232, 0.1);
-  --focus-border-color: #1a73e8;
+  --input-border: 1px solid transparent;
+  --focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.3);
+  --focus-border-color: #60A5FA;
+
+  /* Shadows */
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.12);
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-text: #fafafa;
+    --color-text-muted: #b3b3b3;
+
+    --color-primary-hover-bg: rgba(96, 165, 250, 0.1);
+    --color-primary-badge-bg: rgba(96, 165, 250, 0.15);
+
+    --color-border: rgba(255, 255, 255, 0.12);
+    --color-border-light: rgba(255, 255, 255, 0.08);
+    --color-bg-subtle: rgba(255, 255, 255, 0.05);
+    --color-bg-card: #0F1F3D;
+    --color-bg-page: #0A1628;
+    --color-input-bg: rgba(255, 255, 255, 0.08);
+
+    --color-success: #34d399;
+    --color-error: #fca5a5;
+    --color-error-bg: rgba(239, 68, 68, 0.15);
+    --color-error-border: rgba(239, 68, 68, 0.3);
+    --color-error-muted: #f87171;
+    --color-warning: #f87171;
+
+    --color-status-success: #34d399;
+    --color-status-warning: #fbbf24;
+    --color-status-danger: #f87171;
+    --color-status-danger-dark: #ef4444;
+    --color-warning-bg: rgba(251, 191, 36, 0.15);
+    --color-warning-border: rgba(251, 191, 36, 0.3);
+    --color-warning-text: #fbbf24;
+    --color-upgrade-bg: rgba(96, 165, 250, 0.15);
+    --color-upgrade-border: rgba(96, 165, 250, 0.3);
+    --color-upgrade-title: #60A5FA;
+
+    --color-license-success-bg: rgba(52, 211, 153, 0.15);
+    --color-license-success-text: #34d399;
+    --color-license-error-bg: rgba(248, 113, 113, 0.15);
+    --color-license-error-text: #fca5a5;
+    --color-license-loading-bg: rgba(96, 165, 250, 0.15);
+
+    --color-accent: #60A5FA;
+    --color-link: #60A5FA;
+
+    --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.4);
+
+    --focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.4);
+  }
 }

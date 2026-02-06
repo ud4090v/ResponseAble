@@ -161,7 +161,7 @@
   padding: 10px 24px;
   font-size: 14px;
   font-weight: 500;
-  background-color: var(--color-primary-button);
+  background-color: var(--color-primary);
   color: #fff;
   border: none;
   border-radius: var(--radius-sm);
@@ -170,7 +170,7 @@
 }
 
 .usage-upgrade-button:hover {
-  background-color: var(--color-primary-button-hover);
+  background-color: var(--color-primary-hover);
 }
 
 .usage-reset {

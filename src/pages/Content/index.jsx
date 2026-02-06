@@ -4000,6 +4000,10 @@ const isLicenseError = (err) => {
  */
 const showLicenseRequiredPopup = () => {
     document.querySelector('.responseable-overlay.responseable-license-popup')?.remove();
+
+    const runtime = getChromeRuntime();
+    const brandUrl = runtime?.getURL ? runtime.getURL('xrepl-dark.png') : '';
+
     const overlay = document.createElement('div');
     overlay.className = 'responseable-overlay responseable-license-popup';
     overlay.style.cssText = `
@@ -4008,43 +4012,74 @@ const showLicenseRequiredPopup = () => {
         left: 50%;
         transform: translate(-50%, -50%);
         width: 90%;
-        max-width: 420px;
+        max-width: 400px;
         background: white;
-        border-radius: 12px;
-        box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+        border-radius: 16px;
+        box-shadow: 0 25px 60px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,0,0,0.06);
         z-index: 2147483647;
-        padding: 24px;
-        font-family: Google Sans, Roboto, sans-serif;
+        padding: 32px 28px 28px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         text-align: center;
     `;
     overlay.innerHTML = `
-        <p style="margin: 0 0 20px; font-size: 16px; color: #202124;">Get a free license to use xRepl.ai and generate smart replies.</p>
-        <a href="${REGISTER_URL}" target="_blank" rel="noopener" id="responseable-license-register-btn" style="
-            display: inline-block;
-            padding: 10px 20px;
-            background: #1a73e8;
-            color: white;
-            border-radius: 8px;
-            text-decoration: none;
-            font-weight: 500;
-            margin-bottom: 12px;
-        ">Register for free</a>
-        <br>
-        <button type="button" id="responseable-license-close-btn" style="
-            padding: 8px 16px;
-            background: transparent;
-            border: 1px solid #dadce0;
-            border-radius: 8px;
-            color: #5f6368;
-            cursor: pointer;
-            font-size: 14px;
-        ">Close</button>
+        <div style="margin-bottom: 16px;">
+            ${brandUrl
+                ? `<img src="${brandUrl}" alt="xReplAI" style="height: 32px; width: auto; object-fit: contain;" onerror="this.style.display='none'">`
+                : '<span style="font-size: 20px; font-weight: 700; color: #1E3A8A;">xReplAI</span>'}
+        </div>
+        <p style="margin: 0 0 8px; font-size: 17px; font-weight: 600; color: #0F1F3D;">License required</p>
+        <p style="margin: 0 0 24px; font-size: 14px; color: #717182; line-height: 1.6;">
+            Get a free license to use xReplAI and generate smart replies.
+        </p>
+        <div style="display: flex; gap: 10px; justify-content: center;">
+            <a href="${REGISTER_URL}" target="_blank" rel="noopener" id="responseable-license-register-btn" style="
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 10px 22px;
+                background: linear-gradient(135deg, #60A5FA, #1E3A8A);
+                color: white;
+                border-radius: 8px;
+                text-decoration: none;
+                font-weight: 600;
+                font-size: 14px;
+                border: none;
+                cursor: pointer;
+                transition: opacity 0.15s;
+                box-shadow: 0 2px 8px rgba(30, 58, 138, 0.3);
+            ">Register for Free</a>
+            <button type="button" id="responseable-license-close-btn" style="
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 10px 22px;
+                background: white;
+                border: 1px solid #d1d5db;
+                border-radius: 8px;
+                color: #717182;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 500;
+                transition: background 0.15s;
+            ">Close</button>
+        </div>
     `;
     overlay.addEventListener('click', (e) => {
         if (e.target.id === 'responseable-license-close-btn') {
             overlay.remove();
         }
     });
+    // Hover effects
+    const registerBtn = overlay.querySelector('#responseable-license-register-btn');
+    if (registerBtn) {
+        registerBtn.addEventListener('mouseenter', () => { registerBtn.style.opacity = '0.9'; });
+        registerBtn.addEventListener('mouseleave', () => { registerBtn.style.opacity = '1'; });
+    }
+    const closeBtn = overlay.querySelector('#responseable-license-close-btn');
+    if (closeBtn) {
+        closeBtn.addEventListener('mouseenter', () => { closeBtn.style.background = '#f9fafb'; });
+        closeBtn.addEventListener('mouseleave', () => { closeBtn.style.background = 'white'; });
+    }
     document.body.appendChild(overlay);
 };
 
@@ -4396,7 +4431,7 @@ const showStreamingOverlay = (initialText = '') => {
         box-shadow: 0 20px 50px rgba(0,0,0,0.3);
         z-index: 2147483647;
         padding: 24px;
-        font-family: Google Sans,Roboto,sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         display: flex;
         flex-direction: column;
     `;
@@ -4422,17 +4457,17 @@ const showStreamingOverlay = (initialText = '') => {
         <div style="flex-shrink: 0;">
             <h2 style="margin-top:0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px;">
                 ${streamingBrandUrl ? `<img src="${streamingBrandUrl}" alt="xReplAI" style="max-height: 36px; width: auto; object-fit: contain; animation: responseable-pulse 1.5s ease-in-out infinite;" onerror="this.style.display='none'">` : ''}
-                <span style="color:#9b9fa8;">Generating Drafts...</span>
+                <span style="color:#717182;">Generating Drafts...</span>
             </h2>
             <style>@keyframes responseable-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } }</style>
         </div>
         <div class="responseable-drafts-scroll" style="flex: 1; overflow-y: auto; margin: 16px 0; padding-right: 8px;">
-            <div class="responseable-streaming-content" style="font-size: 14px; line-height: 1.6; color: #202124; white-space: pre-wrap; font-family: inherit;">
-                ${initialText ? initialText.replace(/</g, '&lt;').replace(/>/g, '&gt;') : '<span style="color: #5f6368;">Waiting for response...</span>'}
+            <div class="responseable-streaming-content" style="font-size: 14px; line-height: 1.6; color: #030213; white-space: pre-wrap; font-family: inherit;">
+                ${initialText ? initialText.replace(/</g, '&lt;').replace(/>/g, '&gt;') : '<span style="color: #717182;">Waiting for response...</span>'}
             </div>
         </div>
-        <div style="flex-shrink: 0; display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #dadce0;">
-            <button class="responseable-close-btn" style="padding: 10px 24px; background: #f1f3f4; color: #5f6368; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Cancel</button>
+        <div style="flex-shrink: 0; display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid rgba(0,0,0,0.1);">
+            <button class="responseable-close-btn" style="padding: 10px 24px; background: #f3f3f5; color: #717182; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Cancel</button>
         </div>
     `;
 
@@ -4476,14 +4511,14 @@ const formatStreamingContent = (content) => {
         const body = part.trim();
 
         // Variant label on its own line, styled with blue color
-        const variantLabel = `<div style="color: #5567b9; font-weight: bold; margin-bottom: 8px;">Variant ${variantNum}</div>`;
+        const variantLabel = `<div style="color: #1E3A8A; font-weight: bold; margin-bottom: 8px;">Variant ${variantNum}</div>`;
 
         if (index === 0) {
             // First variant - no separator before it
             return `${variantLabel}${body}`;
         } else {
             // Add horizontal separator before subsequent variants
-            return `<hr style="border: none; border-top: 1px solid #dadce0; margin: 16px 0;">${variantLabel}${body}`;
+            return `<hr style="border: none; border-top: 1px solid rgba(0,0,0,0.1); margin: 16px 0;">${variantLabel}${body}`;
         }
     });
 
@@ -4498,7 +4533,7 @@ const updateStreamingOverlay = (content) => {
     const streamingContent = overlay.querySelector('.responseable-streaming-content');
     if (streamingContent) {
         const formattedContent = formatStreamingContent(content);
-        streamingContent.innerHTML = `${formattedContent}<span class="responseable-typing-cursor" style="display: inline-block; width: 2px; height: 1em; background: #1a73e8; margin-left: 2px;"></span>`;
+        streamingContent.innerHTML = `${formattedContent}<span class="responseable-typing-cursor" style="display: inline-block; width: 2px; height: 1em; background: #1E3A8A; margin-left: 2px;"></span>`;
 
         // Scroll to bottom
         const scrollContainer = overlay.querySelector('.responseable-drafts-scroll');
@@ -4534,7 +4569,7 @@ const showProgressOverlay = (onCancel = null) => {
         box-shadow: 0 20px 50px rgba(0,0,0,0.3);
         z-index: 2147483647;
         padding: 24px;
-        font-family: Google Sans,Roboto,sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         display: flex;
         flex-direction: column;
     `;
@@ -4545,27 +4580,27 @@ const showProgressOverlay = (onCancel = null) => {
             @keyframes responseable-dot-bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-4px); } }
             @keyframes responseable-fade-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
             @keyframes responseable-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-            .responseable-progress-step { display: flex; align-items: flex-start; margin-bottom: 16px; padding: 12px; border-radius: 8px; background: #f8f9fa; transition: all 0.3s ease; }
-            .responseable-progress-step.active { background: #e8f0fe; }
+            .responseable-progress-step { display: flex; align-items: flex-start; margin-bottom: 16px; padding: 12px; border-radius: 8px; background: #f3f3f5; transition: all 0.3s ease; }
+            .responseable-progress-step.active { background: #e0e7ff; }
             .responseable-progress-step.completed { background: #e6f4ea; }
             .responseable-step-icon { width: 24px; height: 24px; margin-right: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-            .responseable-step-spinner { width: 18px; height: 18px; border: 2px solid #dadce0; border-top-color: #1a73e8; border-radius: 50%; animation: responseable-spin 0.8s linear infinite; }
+            .responseable-step-spinner { width: 18px; height: 18px; border: 2px solid rgba(0,0,0,0.1); border-top-color: #60A5FA; border-radius: 50%; animation: responseable-spin 0.8s linear infinite; }
             .responseable-step-check { color: #34a853; font-size: 18px; }
             .responseable-step-pending { color: #9aa0a6; font-size: 14px; }
             .responseable-step-content { flex: 1; }
-            .responseable-step-title { font-weight: 500; color: #202124; margin-bottom: 4px; }
-            .responseable-step-result { font-size: 13px; color: #5f6368; animation: responseable-fade-in 0.3s ease; }
-            .responseable-step-result-value { color: #1a73e8; font-weight: 500; }
+            .responseable-step-title { font-weight: 500; color: #030213; margin-bottom: 4px; }
+            .responseable-step-result { font-size: 13px; color: #717182; animation: responseable-fade-in 0.3s ease; }
+            .responseable-step-result-value { color: #1E3A8A; font-weight: 500; }
             .responseable-goals-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-            .responseable-goal-chip { background: #e8f0fe; color: #1967d2; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+            .responseable-goal-chip { background: #e0e7ff; color: #1E3A8A; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
             .responseable-tones-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-            .responseable-tone-chip { background: #e8f0fe; color: #1967d2; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+            .responseable-tone-chip { background: #e0e7ff; color: #1E3A8A; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
         </style>
         <div style="display: flex; align-items: center; margin-bottom: 20px;">
             <h2 style="margin: 0; font-size: 18px; font-weight: 500; display: flex; align-items: center; gap: 8px;">
                 ${brandUrl ? `<img src="${brandUrl}" alt="xReplAI" style="max-height: 24px; width: auto; object-fit: contain; animation: responseable-pulse 2s ease-in-out infinite;" onerror="this.style.display='none'; var s=this.nextElementSibling; if(s) s.style.display='inline';">
-                <span style="display:none; color: #5567b9;">xRepl.ai</span>` : '<span style="color: #5567b9;">xRepl.ai</span>'}
-                <span style="color: #9b9fa8;"> - Analyzing Email</span>
+                <span style="display:none; color: #1E3A8A;">xRepl.ai</span>` : '<span style="color: #1E3A8A;">xRepl.ai</span>'}
+                <span style="color: #717182;"> - Analyzing Email</span>
             </h2>
         </div>
         <div class="responseable-progress-steps">
@@ -4606,8 +4641,8 @@ const showProgressOverlay = (onCancel = null) => {
                 </div>
             </div>
         </div>
-        <div style="flex-shrink: 0; display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #dadce0; margin-top: auto;">
-            <button class="responseable-close-btn" style="padding: 10px 24px; background: #f1f3f4; color: #5f6368; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Cancel</button>
+        <div style="flex-shrink: 0; display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid rgba(0,0,0,0.1); margin-top: auto;">
+            <button class="responseable-close-btn" style="padding: 10px 24px; background: #f3f3f5; color: #717182; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Cancel</button>
         </div>
     `;
 
@@ -4749,7 +4784,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     box-shadow: 0 20px 50px rgba(0,0,0,0.3);
     z-index: 2147483647;
     padding: 24px;
-    font-family: Google Sans,Roboto,sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
     display: flex;
     flex-direction: column;
   `;
@@ -4870,11 +4905,11 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
             const tone = goalTone || null;
 
             const variantHeader = variantName || tone
-                ? `<div style="font-size: 11px; font-weight: 600; color: #5f6368; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">${variantName ? variantName : ''}${variantName && tone ? ' • ' : ''}${tone ? tone : ''}</div>`
+                ? `<div style="font-size: 11px; font-weight: 600; color: #717182; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">${variantName ? variantName : ''}${variantName && tone ? ' • ' : ''}${tone ? tone : ''}</div>`
                 : '';
 
             const escapedDraftText = draftText.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-            return `<div class="responseable-draft-option" data-draft-text="${escapedDraftText}" style="cursor:pointer; padding:16px; margin:12px 0; border:1px solid #dadce0; border-radius:8px; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#f8f9fa'" onmouseout="this.style.backgroundColor='white'">${variantHeader}<span class="responseable-draft-content">${draftText.replace(/\n/g, '<br>')}</span></div>`;
+            return `<div class="responseable-draft-option" data-draft-text="${escapedDraftText}" style="cursor:pointer; padding:16px; margin:12px 0; border:1px solid rgba(0,0,0,0.1); border-radius:8px; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#f3f3f5'" onmouseout="this.style.backgroundColor='white'">${variantHeader}<span class="responseable-draft-content">${draftText.replace(/\n/g, '<br>')}</span></div>`;
         }).join('');
     };
 
@@ -4913,21 +4948,21 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                 style="
                     padding: 8px 16px; 
                     margin-right: 8px; 
-                    border: 1px solid #dadce0; 
+                    border: 1px solid rgba(0,0,0,0.1); 
                     border-radius: 6px 6px 0 0; 
-                    background: ${isFirst ? '#f8f9fa' : 'white'}; 
-                    color: ${isFirst ? '#1a73e8' : '#5f6368'}; 
+                    background: ${isFirst ? '#f3f3f5' : 'white'}; 
+                    color: ${isFirst ? '#1E3A8A' : '#717182'}; 
                     font-size: 13px; 
                     font-weight: ${isFirst ? '600' : '500'}; 
                     cursor: pointer; 
-                    border-bottom: ${isFirst ? '2px solid #1a73e8' : '1px solid #dadce0'};
+                    border-bottom: ${isFirst ? '2px solid #1E3A8A' : '1px solid rgba(0,0,0,0.1)'};
                     position: relative;
                     transition: all 0.2s;
                 "
-                onmouseover="if(!this.classList.contains('active')) this.style.background='#f1f3f4'"
+                onmouseover="if(!this.classList.contains('active')) this.style.background='#f3f3f5'"
                 onmouseout="if(!this.classList.contains('active')) this.style.background='white'"
             >
-                ${tabTitle}${isFirst ? ' <span style="font-size: 10px; background: #1a73e8; color: white; padding: 2px 6px; border-radius: 10px; margin-left: 4px;">Recommended</span>' : ''}
+                ${tabTitle}${isFirst ? ' <span style="font-size: 10px; background: #1E3A8A; color: white; padding: 2px 6px; border-radius: 10px; margin-left: 4px;">Recommended</span>' : ''}
             </button>
         `;
     }).join('');
@@ -4943,58 +4978,58 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
         const displayName = defaultPackage && defaultPackage.base === true ? 'Generic' : (defaultRole.charAt(0).toUpperCase() + defaultRole.slice(1));
 
         newEmailDropdownHtml = `
-    <div style="margin-bottom: 16px; padding: 12px; background: #f8f9fa; border-radius: 8px; border: 1px solid #dadce0;">
-      <p style="font-size: 13px; color: #5f6368; margin: 0;">Using <strong>${displayName}</strong> package (default).${classification && classification.isGenericSingleDraft ? ' Generated a generic draft based on your content.' : ''}</p>
+    <div style="margin-bottom: 16px; padding: 12px; background: #f3f3f5; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1);">
+      <p style="font-size: 13px; color: #717182; margin: 0;">Using <strong>${displayName}</strong> package (default).${classification && classification.isGenericSingleDraft ? ' Generated a generic draft based on your content.' : ''}</p>
     </div>`;
     }
 
     overlay.innerHTML = `
     <div style="flex-shrink: 0;">
-      <h2 style="margin-top:0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px;"><span id="responseable-overlay-icon"></span><span style="color:#5f6368;">${isNewEmail ? 'Smart Drafts, Instantly' : 'Smart Replies, Instantly'}</span></h2>
-      ${isNewEmail ? '' : (selectedPackageNames ? `<p style="color:#5f6368; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : '')}
+      <h2 style="margin-top:0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px;"><span id="responseable-overlay-icon"></span><span style="color:#717182;">${isNewEmail ? 'Smart Drafts, Instantly' : 'Smart Replies, Instantly'}</span></h2>
+      ${isNewEmail ? '' : (selectedPackageNames ? `<p style="color:#717182; margin-top: -8px; margin-bottom: 8px; font-size: 12px;"><strong>Selected Packages:</strong> ${selectedPackageNames}</p>` : '')}
       ${newEmailDropdownHtml}
-      ${!isNewEmail && matchedTypeInfo ? `<p style="color:#5f6368; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}
-      ${classification ? `<p id="sender-intent-text" style="color:#5f6368; margin-top: ${matchedTypeInfo || selectedPackageNames ? '0' : '-8px'}; margin-bottom: 12px; font-size: 12px;"><strong>${isNewEmail ? 'Sender Intent' : 'Intent'}:</strong> ${classification.intent || 'general inquiry'}${classification.key_topics && classification.key_topics.length > 0 ? ` | Topics: ${classification.key_topics.join(', ')}` : ''}</p>` : ''}
+      ${!isNewEmail && matchedTypeInfo ? `<p style="color:#717182; margin-top: ${selectedPackageNames ? '0' : '-8px'}; margin-bottom: 8px; font-size: 12px;"><strong>Matched Type:</strong> <span style="text-transform: capitalize;">${matchedTypeInfo.name}</span> - ${matchedTypeInfo.description}</p>` : ''}
+      ${classification ? `<p id="sender-intent-text" style="color:#717182; margin-top: ${matchedTypeInfo || selectedPackageNames ? '0' : '-8px'}; margin-bottom: 12px; font-size: 12px;"><strong>${isNewEmail ? 'Sender Intent' : 'Intent'}:</strong> ${classification.intent || 'general inquiry'}${classification.key_topics && classification.key_topics.length > 0 ? ` | Topics: ${classification.key_topics.join(', ')}` : ''}</p>` : ''}
       ${responseGoals.length > 1 && !(classification && classification.isGenericSingleDraft) ? `
-      <div id="goals-tabs-container" style="margin-bottom: 16px; border-bottom: 1px solid #dadce0; padding-bottom: 8px;">
+      <div id="goals-tabs-container" style="margin-bottom: 16px; border-bottom: 1px solid rgba(0,0,0,0.1); padding-bottom: 8px;">
       <div style="display: flex; flex-wrap: wrap; gap: 0;">
         ${tabsHtml}
       </div>
-      <div id="goal-description" style="margin-top: 12px; padding: 8px 12px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #5f6368; min-height: 20px;">
+      <div id="goal-description" style="margin-top: 12px; padding: 8px 12px; background: #f3f3f5; border-radius: 4px; font-size: 12px; color: #717182; min-height: 20px;">
         <strong>Goal:</strong> <span id="goal-description-text">${currentGoal}</span>
       </div>
     </div>
     ` : ''}
     ${classification && classification.tone_sets && classification.tone_sets[currentGoal] && classification.tone_sets[currentGoal].length > 1 ? `
       <div id="tone-selector-container" style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-      <label for="tone-selector" style="font-size: 13px; color: #5f6368; font-weight: 500;">Tone:</label>
-      <select id="tone-selector" style="padding: 6px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px; background: white; color: #202124; cursor: pointer;">
+      <label for="tone-selector" style="font-size: 13px; color: #717182; font-weight: 500;">Tone:</label>
+      <select id="tone-selector" style="padding: 6px 12px; border: 1px solid rgba(0,0,0,0.1); border-radius: 8px; font-size: 13px; background: #f3f3f5; color: #030213; cursor: pointer;">
         ${classification.tone_sets[currentGoal].map(tone => `<option value="${tone}" ${tone === currentTone ? 'selected' : ''}>${tone}</option>`).join('')}
       </select>
-      <span id="regenerate-status" style="font-size: 12px; color: #5f6368; margin-left: 8px;"></span>
+      <span id="regenerate-status" style="font-size: 12px; color: #717182; margin-left: 8px;"></span>
     </div>
     ` : ''}
-      <p id="draft-instruction-text" style="color:#5f6368; margin-top: 0; display: ${draftsHtml ? 'block' : 'none'};">Click any draft to insert it</p>
+      <p id="draft-instruction-text" style="color:#717182; margin-top: 0; display: ${draftsHtml ? 'block' : 'none'};">Click any draft to insert it</p>
     </div>
     <div id="drafts-container" style="flex: 1; overflow-y: auto; min-height: 0; margin: 12px 0;">
       ${draftsHtml}
     </div>
-    <div id="loading-indicator" style="display: none; text-align: center; padding: 20px; color: #5f6368;">
+    <div id="loading-indicator" style="display: none; text-align: center; padding: 20px; color: #717182;">
       Generating drafts...
     </div>
-    <div style="flex-shrink: 0; margin-top: 16px; padding-top: 16px; border-top: 1px solid #dadce0;">
+    <div style="flex-shrink: 0; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(0,0,0,0.1);">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 12px; color: #5f6368;">Was this helpful?</span>
-          <button id="responseable-thumbs-up" style="padding: 6px 10px; background: transparent; border: 1px solid #dadce0; border-radius: 4px; cursor: pointer; font-size: 16px; color: #5f6368; transition: all 0.2s;" title="Thumbs up">
+          <span style="font-size: 12px; color: #717182;">Was this helpful?</span>
+          <button id="responseable-thumbs-up" style="padding: 6px 10px; background: transparent; border: 1px solid rgba(0,0,0,0.1); border-radius: 4px; cursor: pointer; font-size: 16px; color: #717182; transition: all 0.2s;" title="Thumbs up">
             👍
           </button>
-          <button id="responseable-thumbs-down" style="padding: 6px 10px; background: transparent; border: 1px solid #dadce0; border-radius: 4px; cursor: pointer; font-size: 16px; color: #5f6368; transition: all 0.2s;" title="Thumbs down">
+          <button id="responseable-thumbs-down" style="padding: 6px 10px; background: transparent; border: 1px solid rgba(0,0,0,0.1); border-radius: 4px; cursor: pointer; font-size: 16px; color: #717182; transition: all 0.2s;" title="Thumbs down">
             👎
           </button>
         </div>
       </div>
-      <button id="responseable-close-button" style="width: 100%; padding:10px 16px; background:#1a73e8; color:white; border:none; border-radius:4px; cursor:pointer; font-size: 14px; font-weight: 500;">
+      <button id="responseable-close-button" style="width: 100%; padding:10px 16px; background:#1E3A8A; color:white; border:none; border-radius:4px; cursor:pointer; font-size: 14px; font-weight: 500;">
       Close
     </button>
     </div>
@@ -5044,10 +5079,10 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                 // Update active tab styling
                 goalTabs.forEach(t => {
                     const isActive = t === tab;
-                    t.style.background = isActive ? '#f8f9fa' : 'white';
-                    t.style.color = isActive ? '#1a73e8' : '#5f6368';
+                    t.style.background = isActive ? '#f3f3f5' : 'white';
+                    t.style.color = isActive ? '#1E3A8A' : '#717182';
                     t.style.fontWeight = isActive ? '600' : '500';
-                    t.style.borderBottom = isActive ? '2px solid #1a73e8' : '1px solid #dadce0';
+                    t.style.borderBottom = isActive ? '2px solid #1E3A8A' : '1px solid rgba(0,0,0,0.1)';
                     if (isActive) {
                         t.classList.add('active');
                     } else {
@@ -5163,9 +5198,9 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     if (thumbsUpBtn) {
         thumbsUpBtn.addEventListener('click', () => {
             trackThumbsUp().catch(err => console.warn('Failed to track thumbs up:', err));
-            thumbsUpBtn.style.background = '#e8f0fe';
-            thumbsUpBtn.style.borderColor = '#1a73e8';
-            thumbsUpBtn.style.color = '#1a73e8';
+            thumbsUpBtn.style.background = '#e0e7ff';
+            thumbsUpBtn.style.borderColor = '#1E3A8A';
+            thumbsUpBtn.style.color = '#1E3A8A';
             thumbsUpBtn.disabled = true;
             if (thumbsDownBtn) {
                 thumbsDownBtn.disabled = true;

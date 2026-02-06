@@ -9,6 +9,8 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  background: var(--color-bg-page);
+  color: var(--color-text);
 }
 
 .popup-header {
@@ -99,12 +101,12 @@
 }
 
 .popup-tab:hover {
-  color: var(--color-primary);
+  color: var(--color-accent);
 }
 
 .popup-tab-active {
-  color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
 }
 
 .popup-tab-panel {
@@ -177,14 +179,14 @@
 .popup-default-badge {
   font-size: 10px;
   font-weight: 600;
-  color: var(--color-primary);
+  color: var(--color-accent);
   background: var(--color-primary-badge-bg);
   padding: 1px 6px;
   border-radius: var(--radius-sm);
 }
 
 .setting-value {
-  color: var(--color-primary);
+  color: var(--color-accent);
   font-weight: 500;
 }
 
@@ -274,8 +276,8 @@
 
 .popup-button-secondary {
   background: transparent;
-  color: var(--color-primary);
-  border: 1px solid var(--color-primary);
+  color: var(--color-accent);
+  border: 1px solid var(--color-border);
 }
 
 .popup-button-secondary:hover {
