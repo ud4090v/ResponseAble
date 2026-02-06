@@ -336,7 +336,7 @@ const loadPackagesFromAPI = async () => {
             const browserAPI = typeof chrome !== 'undefined' && chrome.storage ? chrome : (typeof browser !== 'undefined' && browser.storage ? browser : null);
             if (browserAPI && browserAPI.storage) {
                 const stored = await new Promise((resolve) => {
-                    browserAPI.storage.sync.get(['cachedPackages', 'cachedPackagesTimestamp'], (result) => {
+                    browserAPI.storage.local.get(['cachedPackages', 'cachedPackagesTimestamp'], (result) => {
                         resolve(result);
                     });
                 });
@@ -371,7 +371,7 @@ const loadPackagesFromAPI = async () => {
 
                 // Cache in storage
                 if (browserAPI && browserAPI.storage) {
-                    browserAPI.storage.sync.set({
+                    browserAPI.storage.local.set({
                         cachedPackages: cachedPackages,
                         cachedPackagesTimestamp: Date.now(),
                     });

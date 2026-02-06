@@ -186,7 +186,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         setSubscriptionPlans(data.plans);
         
         // Cache plans in storage for Content Script
-        chrome.storage.sync.set({
+        chrome.storage.local.set({
           cachedPlans: data.plans,
           cachedPlansTimestamp: Date.now(),
         });
@@ -265,7 +265,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
             const definitionsData = await definitionsResponse.json();
             if (definitionsData.success && definitionsData.packages) {
               // Cache in storage for Content Script to use
-              chrome.storage.sync.set({
+              chrome.storage.local.set({
                 cachedPackages: definitionsData.packages,
                 cachedPackagesTimestamp: Date.now(),
               });
