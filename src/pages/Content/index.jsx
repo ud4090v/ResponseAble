@@ -4042,9 +4042,14 @@ const showLicenseRequiredPopup = () => {
 /**
  * Show a styled popup when the user hits the TPM rate limit,
  * offering them the choice to wait or upgrade their plan.
+ * Styled to match xreplaisite UI.
  */
 const showRateLimitPopup = () => {
     document.querySelector('.responseable-overlay.responseable-rate-limit-popup')?.remove();
+
+    const runtime = getChromeRuntime();
+    const brandUrl = runtime?.getURL ? runtime.getURL('xrepl-dark.png') : '';
+
     const overlay = document.createElement('div');
     overlay.className = 'responseable-overlay responseable-rate-limit-popup';
     overlay.style.cssText = `
@@ -4053,49 +4058,75 @@ const showRateLimitPopup = () => {
         left: 50%;
         transform: translate(-50%, -50%);
         width: 90%;
-        max-width: 420px;
+        max-width: 400px;
         background: white;
-        border-radius: 12px;
-        box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+        border-radius: 16px;
+        box-shadow: 0 25px 60px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,0,0,0.06);
         z-index: 2147483647;
-        padding: 28px 24px;
-        font-family: Google Sans, Roboto, sans-serif;
+        padding: 32px 28px 28px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         text-align: center;
     `;
     overlay.innerHTML = `
-        <div style="font-size: 28px; margin-bottom: 12px;">⏱️</div>
-        <p style="margin: 0 0 8px; font-size: 17px; font-weight: 600; color: #202124;">Rate limit reached</p>
-        <p style="margin: 0 0 20px; font-size: 14px; color: #5f6368; line-height: 1.5;">
+        <div style="margin-bottom: 16px;">
+            ${brandUrl
+                ? `<img src="${brandUrl}" alt="xReplAI" style="height: 32px; width: auto; object-fit: contain;" onerror="this.style.display='none'">`
+                : '<span style="font-size: 20px; font-weight: 700; color: #1E3A8A;">xReplAI</span>'}
+        </div>
+        <p style="margin: 0 0 8px; font-size: 17px; font-weight: 600; color: #0F1F3D;">Rate limit reached</p>
+        <p style="margin: 0 0 24px; font-size: 14px; color: #717182; line-height: 1.6;">
             You're generating too fast for your current plan.<br>
             Upgrade for higher speed limits, or wait a moment and try again.
         </p>
-        <a href="${REGISTER_URL}" target="_blank" rel="noopener" id="responseable-rate-limit-upgrade-btn" style="
-            display: inline-block;
-            padding: 10px 24px;
-            background: #1a73e8;
-            color: white;
-            border-radius: 8px;
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 14px;
-            margin-bottom: 12px;
-        ">Upgrade Plan</a>
-        <br>
-        <button type="button" id="responseable-rate-limit-close-btn" style="
-            padding: 8px 16px;
-            background: transparent;
-            border: 1px solid #dadce0;
-            border-radius: 8px;
-            color: #5f6368;
-            cursor: pointer;
-            font-size: 14px;
-        ">Close</button>
+        <div style="display: flex; gap: 10px; justify-content: center;">
+            <a href="${REGISTER_URL}" target="_blank" rel="noopener" id="responseable-rate-limit-upgrade-btn" style="
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 10px 22px;
+                background: linear-gradient(135deg, #60A5FA, #1E3A8A);
+                color: white;
+                border-radius: 8px;
+                text-decoration: none;
+                font-weight: 600;
+                font-size: 14px;
+                border: none;
+                cursor: pointer;
+                transition: opacity 0.15s;
+                box-shadow: 0 2px 8px rgba(30, 58, 138, 0.3);
+            ">Upgrade Plan</a>
+            <button type="button" id="responseable-rate-limit-close-btn" style="
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 10px 22px;
+                background: white;
+                border: 1px solid #d1d5db;
+                border-radius: 8px;
+                color: #717182;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 500;
+                transition: background 0.15s;
+            ">Close</button>
+        </div>
     `;
     overlay.addEventListener('click', (e) => {
         if (e.target.id === 'responseable-rate-limit-close-btn') {
             overlay.remove();
         }
     });
+    // Hover effects
+    const upgradeBtn = overlay.querySelector('#responseable-rate-limit-upgrade-btn');
+    if (upgradeBtn) {
+        upgradeBtn.addEventListener('mouseenter', () => { upgradeBtn.style.opacity = '0.9'; });
+        upgradeBtn.addEventListener('mouseleave', () => { upgradeBtn.style.opacity = '1'; });
+    }
+    const closeBtn = overlay.querySelector('#responseable-rate-limit-close-btn');
+    if (closeBtn) {
+        closeBtn.addEventListener('mouseenter', () => { closeBtn.style.background = '#f9fafb'; });
+        closeBtn.addEventListener('mouseleave', () => { closeBtn.style.background = 'white'; });
+    }
     document.body.appendChild(overlay);
 };
 
