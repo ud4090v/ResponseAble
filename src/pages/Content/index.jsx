@@ -611,7 +611,8 @@ const analyzeWritingStyle = async (userEmails, platform) => {
         // Return the response directly (API already handles defaults and formatting)
         return styleAnalysis;
     } catch (error) {
-        console.error('Style analysis error:', error);
+        if (isRateLimitError(error)) throw error; // Propagate to top-level handler
+        console.warn('Style analysis error (returning null):', error.message);
         return null;
     }
 };
@@ -727,7 +728,8 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
             typeMatchResult = await response.json();
         } catch (typeError) {
             if (typeError.name === 'AbortError') throw typeError;
-            console.error('Type determination error:', typeError);
+            if (isRateLimitError(typeError)) throw typeError; // Propagate to top-level handler
+            console.warn('Type determination error (falling back to defaults):', typeError.message);
             // Fallback to base package type
             typeMatchResult = {
                 matched_type: userPackages.find(p => p.base),
@@ -823,7 +825,8 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
                 };
             } catch (genericError) {
                 if (genericError.name === 'AbortError') throw genericError;
-                console.error('Generic goals determination error:', genericError);
+                if (isRateLimitError(genericError)) throw genericError; // Propagate to top-level handler
+                console.warn('Generic goals determination error (falling back to defaults):', genericError.message);
                 // Fallback with generic values
                 intentGoalsResult = {
                     intent: genericIntent,
@@ -925,7 +928,8 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
                 intentGoalsResult = await response.json();
             } catch (intentError) {
                 if (intentError.name === 'AbortError') throw intentError;
-                console.error('Intent/Goals determination error:', intentError);
+                if (isRateLimitError(intentError)) throw intentError; // Propagate to top-level handler
+                console.warn('Intent/Goals determination error (falling back to defaults):', intentError.message);
                 // Fallback with generic values
                 intentGoalsResult = {
                     intent: 'General inquiry or follow-up',
@@ -1453,12 +1457,10 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
     } catch (error) {
         // If user cancelled, propagate the abort so the calling flow stops
         if (error.name === 'AbortError') throw error;
+        // Rate limit errors should propagate to the top-level handler (shows popup)
+        if (isRateLimitError(error)) throw error;
         const errorMessage = error?.message || String(error) || 'Unknown error';
-        console.warn('Email classification error:', JSON.stringify({
-            message: errorMessage,
-            error: error?.toString(),
-            stack: error?.stack
-        }, null, 2));
+        console.warn('Email classification error (falling back to defaults):', errorMessage);
         // Return safe defaults
         // Load style profile for fallback only if style mimicking is enabled
         const fallbackStyleProfile = apiConfig.enableStyleMimicking
@@ -3130,7 +3132,8 @@ const injectGenerateButton = () => {
                         }
                     } catch (typeError) {
                         if (typeError.name === 'AbortError') throw typeError;
-                        console.error('Error determining type from content:', typeError);
+                        if (isRateLimitError(typeError)) throw typeError; // Propagate to top-level handler
+                        console.warn('Error determining type from content (falling back to defaults):', typeError.message);
                         // Fallback to default role
                         selectedRole = defaultRole;
                         // Still report type progress with fallback
@@ -3650,7 +3653,7 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
             });
         }
     } catch (error) {
-        console.error('Error generating generic single draft:', error);
+        if (!isRateLimitError(error)) console.error('Error generating generic single draft:', error);
         throw error;
     }
 };
@@ -3724,7 +3727,8 @@ Email body: ${composeBodyText || '(not provided)'}`
             intentGoalsResult = await response.json();
         } catch (goalsError) {
             if (goalsError.name === 'AbortError') throw goalsError;
-            console.error('Goals determination error:', goalsError);
+            if (isRateLimitError(goalsError)) throw goalsError; // Propagate to top-level handler
+            console.warn('Goals determination error (falling back to defaults):', goalsError.message);
             // Fallback with generic values
             intentGoalsResult = {
                 response_goals: ['Introduce yourself', 'Build rapport', 'Make a request'],
