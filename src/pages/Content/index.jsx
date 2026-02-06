@@ -1035,7 +1035,8 @@ const classifyEmail = async (richContext, sourceMessageText, platform, threadHis
             }
         } catch (toneError) {
             if (toneError.name === 'AbortError') throw toneError;
-            console.error('Tone determination error:', toneError);
+            if (isRateLimitError(toneError)) throw toneError; // Propagate to top-level handler
+            console.warn('Tone determination error (falling back to defaults):', toneError.message);
             // Fallback with professional tone
             toneResult = {
                 tone_needed: 'Professional and friendly',
@@ -3475,6 +3476,8 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
                 abortSignal
             );
         } catch (fetchError) {
+            // Rate limit errors are handled by top-level – propagate cleanly
+            if (isRateLimitError(fetchError)) throw fetchError;
             // Handle network errors (CORS, connection issues, etc.)
             const networkError = fetchError.message || String(fetchError);
             console.error('Network error during draft generation API call:', networkError);
@@ -3587,7 +3590,8 @@ const generateGenericSingleDraft = async (richContext, platform, subject, recipi
                 }
             } catch (toneError) {
                 if (toneError.name === 'AbortError') throw toneError;
-                console.error('Tone determination error for generic draft:', toneError);
+                if (isRateLimitError(toneError)) throw toneError; // Propagate to top-level handler
+                console.warn('Tone determination error for generic draft (falling back to defaults):', toneError.message);
                 // Use defaults
                 toneResult.tone_sets[goal] = defaultTones.slice(0, apiConfig.numTones || 3);
             }
@@ -3876,7 +3880,8 @@ Email body: ${composeBodyText || '(not provided)'}`
             }
         } catch (toneError) {
             if (toneError.name === 'AbortError') throw toneError;
-            console.error('Tone determination error:', toneError);
+            if (isRateLimitError(toneError)) throw toneError; // Propagate to top-level handler
+            console.warn('Tone determination error (falling back to defaults):', toneError.message);
             // Fallback
             toneResult = {
                 tone_needed: 'professional',
@@ -3959,7 +3964,7 @@ Email body: ${composeBodyText || '(not provided)'}`
             abortSignal
         );
     } catch (error) {
-        console.error('Error generating drafts for new email:', error);
+        if (!isRateLimitError(error)) console.error('Error generating drafts for new email:', error);
         throw error;
     }
 };
@@ -4342,6 +4347,8 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
                 );
             }
         } catch (fetchError) {
+            // Rate limit errors are handled by top-level – propagate cleanly
+            if (isRateLimitError(fetchError)) throw fetchError;
             // Handle network errors (CORS, connection issues, etc.)
             const networkError = fetchError.message || String(fetchError);
             console.error('Network error during draft generation API call:', networkError);
@@ -4360,7 +4367,7 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
         // Final call with complete content
         onComplete(draftsText, false); // false = not partial, this is the final content
     } catch (err) {
-        console.error('Error generating drafts:', err);
+        if (!isRateLimitError(err)) console.error('Error generating drafts:', err);
         throw err;
     }
 };
@@ -5102,7 +5109,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                         regenerateContext  // Pass regenerateContext
                     );
                 } catch (err) {
-                    console.error('Error generating drafts for goal:', err);
+                    if (!isRateLimitError(err)) console.error('Error generating drafts for goal:', err);
                     if (isRateLimitError(err)) {
                         document.querySelector('.responseable-overlay')?.remove();
                         showRateLimitPopup();
