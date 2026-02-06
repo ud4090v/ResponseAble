@@ -4404,7 +4404,7 @@ const showProgressOverlay = (onCancel = null) => {
 
     // Resolve brand image URL inside overlay (same as drafts overlay) so it always loads
     const runtime = getChromeRuntime();
-    const brandUrl = runtime?.runtime?.getURL ? runtime.runtime.getURL('xReplAI-brandw.png') : '';
+    const brandUrl = runtime?.getURL ? runtime.getURL('xReplAI-brandw.png') : '';
 
     const overlay = document.createElement('div');
     overlay.className = 'responseable-overlay responseable-progress-overlay';
