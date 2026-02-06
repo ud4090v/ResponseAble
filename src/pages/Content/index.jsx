@@ -2919,8 +2919,7 @@ const injectGenerateButton = () => {
             if (isForward || !isReply) {
                 // NEW EMAIL: Extract compose window content and generate drafts
                 // Show progress overlay immediately for instant feedback
-                const iconUrl = getChromeRuntime()?.runtime?.getURL ? getChromeRuntime().runtime.getURL('xReplAI-brandw.png') : null;
-                showProgressOverlay(iconUrl);
+                showProgressOverlay();
 
                 // Validate license once and cache for this flow (avoids extra /validate before generation)
                 await getCachedOrValidateLicense();
@@ -3286,8 +3285,7 @@ const injectGenerateButton = () => {
 
             // REPLY: Use classification flow with immediate progress overlay
             // Show progress overlay immediately for instant feedback
-            const iconUrl = getChromeRuntime()?.runtime?.getURL ? getChromeRuntime().runtime.getURL('xReplAI-brandw.png') : null;
-            showProgressOverlay(iconUrl);
+            showProgressOverlay();
 
             // Validate license once and cache for this flow (avoids extra /validate before generation)
             await getCachedOrValidateLicense();
@@ -4362,9 +4360,13 @@ const updateStreamingOverlay = (content) => {
 
 // Show progress overlay immediately when user clicks the button
 // This provides instant feedback while analysis steps complete
-const showProgressOverlay = (iconUrl) => {
+const showProgressOverlay = () => {
     // Remove any existing overlay
     document.querySelector('.responseable-overlay')?.remove();
+
+    // Resolve brand image URL inside overlay (same as drafts overlay) so it always loads
+    const runtime = getChromeRuntime();
+    const brandUrl = runtime?.runtime?.getURL ? runtime.runtime.getURL('xReplAI-brandw.png') : '';
 
     const overlay = document.createElement('div');
     overlay.className = 'responseable-overlay responseable-progress-overlay';
@@ -4408,9 +4410,12 @@ const showProgressOverlay = (iconUrl) => {
             .responseable-tones-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
             .responseable-tone-chip { background: #e8f0fe; color: #1967d2; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
         </style>
-        <div style="display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 20px;">
-            ${iconUrl ? `<img src="${iconUrl}" alt="xReplAI" style="max-height: 36px; width: auto; object-fit: contain; margin-bottom: 4px; animation: responseable-pulse 2s ease-in-out infinite;">` : ''}
-            <h2 style="margin: 0; font-size: 18px; font-weight: 500; color: #9b9fa8;">Analyzing Email</h2>
+        <div style="display: flex; align-items: center; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 18px; font-weight: 500; display: flex; align-items: center; gap: 8px;">
+                ${brandUrl ? `<img src="${brandUrl}" alt="xReplAI" style="width: 24px; height: 24px; object-fit: contain; animation: responseable-pulse 2s ease-in-out infinite;" onerror="this.style.display='none'; var s=this.nextElementSibling; if(s) s.style.display='inline';">
+                <span style="display:none; color: #5567b9;">xRepl.ai</span>` : '<span style="color: #5567b9;">xRepl.ai</span>'}
+                <span style="color: #9b9fa8;"> - Analyzing Email</span>
+            </h2>
         </div>
         <div class="responseable-progress-steps">
             <div class="responseable-progress-step active" id="step-type">
