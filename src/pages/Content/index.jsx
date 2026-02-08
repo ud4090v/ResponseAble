@@ -2816,10 +2816,9 @@ const injectGenerateButton = () => {
 
     const adapter = platformAdapters[platform];
 
-    // For LinkedIn, only inject in messaging context (not news feed)
-    if (platform === 'linkedin' && adapter.isMessagingContext && !adapter.isMessagingContext()) {
-        return; // Not in messaging area
-    }
+    // No messaging-context gate for LinkedIn — findSendButtons() is compose-anchored
+    // and only returns buttons near visible compose inputs. On feed pages without
+    // popups it returns [] naturally, so no gate is needed.
 
     const sendButtons = adapter.findSendButtons();
 
@@ -5691,9 +5690,9 @@ const injectCommentButton = () => {
         return; // Only for LinkedIn
     }
 
-    // Don't inject in messaging context (already handled by injectGenerateButton)
-    const adapter = platformAdapters.linkedin;
-    if (adapter.isMessagingContext && adapter.isMessagingContext()) {
+    // Don't inject comment buttons on the messaging page
+    // (messaging is handled by injectGenerateButton)
+    if (window.location.pathname.startsWith('/messaging')) {
         return;
     }
 
