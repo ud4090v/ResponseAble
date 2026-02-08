@@ -2410,23 +2410,6 @@ const platformAdapters = {
         buttonClass: 'T-I J-J5-Ji',
     },
     linkedin: {
-        // Compose-anchored detection: a messaging context exists whenever
-        // there's a visible compose input with a nearby Send button.
-        // URL check covers the messaging page before the compose form loads.
-        isMessagingContext: () => {
-            if (window.location.pathname.startsWith('/messaging')) return true;
-            // Let findSendButtons() do the real detection — if it returns
-            // results, we're in a messaging context. Return true broadly
-            // here so the gate doesn't block injection.
-            const inputs = document.querySelectorAll('[contenteditable="true"], [role="textbox"], textarea');
-            for (const input of inputs) {
-                if (input.offsetWidth === 0 && input.offsetHeight === 0) continue;
-                const label = (input.getAttribute('aria-label') || '').toLowerCase();
-                if (label.includes('search')) continue;
-                return true;
-            }
-            return false;
-        },
         // Compose-anchored button detection: find visible compose inputs,
         // then locate the nearest Send button relative to each.
         // No dependency on LinkedIn class names — uses web standards only.
