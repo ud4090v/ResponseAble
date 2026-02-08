@@ -2410,27 +2410,99 @@ const platformAdapters = {
         buttonClass: 'T-I J-J5-Ji',
     },
     linkedin: {
-        // Check if we're in messaging area (not news feed)
+        // Compose-anchored detection: a messaging context exists whenever
+        // there's a visible compose input with a nearby Send button.
+        // URL check covers the messaging page before the compose form loads.
         isMessagingContext: () => {
-            // Check for messaging-specific elements that indicate we're in the messaging interface
-            return !!(
-                document.querySelector('.msg-form__message-texteditor') ||
-                document.querySelector('.msg-s-message-list__compose-textarea') ||
-                document.querySelector('.msg-form__contenteditable') ||
-                document.querySelector('.msg-conversation-card') ||
-                document.querySelector('.msg-s-message-list')
-            );
+            if (window.location.pathname.startsWith('/messaging')) return true;
+            // Let findSendButtons() do the real detection — if it returns
+            // results, we're in a messaging context. Return true broadly
+            // here so the gate doesn't block injection.
+            const inputs = document.querySelectorAll('[contenteditable="true"], [role="textbox"], textarea');
+            for (const input of inputs) {
+                if (input.offsetWidth === 0 && input.offsetHeight === 0) continue;
+                const label = (input.getAttribute('aria-label') || '').toLowerCase();
+                if (label.includes('search')) continue;
+                return true;
+            }
+            return false;
         },
-        // Find send buttons - LinkedIn uses different selectors
+        // Compose-anchored button detection: find visible compose inputs,
+        // then locate the nearest Send button relative to each.
+        // No dependency on LinkedIn class names — uses web standards only.
         findSendButtons: () => {
-            // Only find send buttons in messaging context
-            // Use more specific selectors to avoid news feed buttons
-            return document.querySelectorAll('button.msg-form__send-button, button[data-control-name="send"].msg-form__send-button');
+            const results = [];
+            const seen = new Set();
+
+            const isSendButton = (btn) => {
+                const text = (btn.textContent || '').trim();
+                const aria = (btn.getAttribute('aria-label') || '');
+                return text === 'Send' || aria === 'Send' || aria === 'Send Message';
+            };
+
+            const searchInRoot = (root) => {
+                const composeInputs = root.querySelectorAll(
+                    '[contenteditable="true"], [role="textbox"], textarea'
+                );
+
+                for (const input of composeInputs) {
+                    // Must be visible
+                    if (input.offsetWidth === 0 && input.offsetHeight === 0) continue;
+
+                    // Skip search boxes
+                    const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
+                    if (ariaLabel.includes('search')) continue;
+
+                    // Walk up from compose input to find the nearest Send button
+                    let container = input.parentElement;
+                    for (let depth = 0; depth < 15 && container; depth++) {
+                        const buttons = container.querySelectorAll('button, [role="button"]');
+                        let foundAtThisLevel = false;
+                        for (const btn of buttons) {
+                            if (seen.has(btn)) continue;
+                            if (isSendButton(btn)) {
+                                results.push(btn);
+                                seen.add(btn);
+                                foundAtThisLevel = true;
+                            }
+                        }
+                        if (foundAtThisLevel) break;
+                        container = container.parentElement;
+                    }
+                }
+            };
+
+            // Search in main document
+            searchInRoot(document);
+
+            // Search in Shadow DOM (#interop-outlet)
+            const shadowHost = document.querySelector('#interop-outlet');
+            if (shadowHost?.shadowRoot) {
+                searchInRoot(shadowHost.shadowRoot);
+            }
+
+            return results;
         },
-        // Find compose/message input
-        findComposeInput: () => {
-            // Try multiple selectors for LinkedIn message input
-            return document.querySelector('div[contenteditable="true"][role="textbox"].msg-s-message-list__compose-textarea, div[contenteditable="true"].msg-form__message-texteditor, div.msg-form__contenteditable');
+        // Find compose input, optionally scoped near a specific send button
+        findComposeInput: (scopeNearButton) => {
+            // Scoped search: walk up from the send button to find nearby compose input
+            if (scopeNearButton) {
+                let ancestor = scopeNearButton.parentElement;
+                for (let depth = 0; depth < 15 && ancestor; depth++) {
+                    const editable = ancestor.querySelector('[contenteditable="true"], [role="textbox"], textarea');
+                    if (editable && (editable.offsetWidth > 0 || editable.offsetHeight > 0)) return editable;
+                    ancestor = ancestor.parentElement;
+                }
+            }
+            // Fallback: any visible compose input on page
+            const inputs = document.querySelectorAll('[contenteditable="true"], [role="textbox"], textarea');
+            for (const input of inputs) {
+                if (input.offsetWidth > 0 || input.offsetHeight > 0) {
+                    const label = (input.getAttribute('aria-label') || '').toLowerCase();
+                    if (!label.includes('search')) return input;
+                }
+            }
+            return null;
         },
         // Find recipient field (LinkedIn shows recipient name, not input)
         findRecipientField: () => {
@@ -2532,9 +2604,9 @@ const platformAdapters = {
                 ? `To: ${recipientName}\n\nPrevious conversation:\n${previousThread}`
                 : `To: ${recipientName}`;
         },
-        // Insert text into compose field
-        insertText: (text) => {
-            const composeInput = platformAdapters.linkedin.findComposeInput();
+        // Insert text into compose field, optionally scoped near a send button
+        insertText: (text, scopeNearButton) => {
+            const composeInput = platformAdapters.linkedin.findComposeInput(scopeNearButton);
             if (composeInput) {
                 composeInput.focus();
                 // For contenteditable divs, we need to set the text differently
@@ -2751,19 +2823,23 @@ const injectGenerateButton = () => {
 
     const sendButtons = adapter.findSendButtons();
 
-    sendButtons.forEach(sendButton => {
-        // For LinkedIn, verify the send button is in a messaging context
-        if (platform === 'linkedin') {
-            // Check if the send button is within a messaging form
-            const msgForm = sendButton.closest('.msg-form, .msg-s-message-list');
-            if (!msgForm) {
-                return; // Skip if not in messaging form
-            }
-        }
-
-        // Find the container/toolbar for the button
+    sendButtons.forEach((sendButton, idx) => {
         const toolbar = sendButton.parentElement;
-        if (!toolbar || toolbar.querySelector('.responseable-button')) return;
+        if (!toolbar) return;
+
+        // Duplicate injection guard
+        if (platform === 'linkedin') {
+            // Check adjacent siblings — each Send button is independent
+            if (sendButton.nextElementSibling?.classList?.contains('responseable-button') ||
+                sendButton.previousElementSibling?.classList?.contains('responseable-button')) {
+                return;
+            }
+            // Also check parent level for safety
+            if (toolbar.querySelector('.responseable-button')) return;
+        } else {
+            // Gmail: parent-level check
+            if (toolbar.querySelector('.responseable-button')) return;
+        }
 
         const generateButton = createButton('xReplAI', 'Generate AI message drafts', 'responseable-generate', platform);
 
@@ -2984,8 +3060,8 @@ const injectGenerateButton = () => {
                         }
                     }
                 } else if (platform === 'linkedin') {
-                    // LinkedIn compose input
-                    const composeInput = document.querySelector('.msg-form__contenteditable, .msg-form__texteditor');
+                    // LinkedIn compose input (BEM for full page, scoped for popup chat)
+                    const composeInput = platformAdapters.linkedin.findComposeInput(sendButton);
                     if (composeInput) {
                         let fullText = composeInput.innerText || composeInput.textContent || '';
                         if (isForward && forwardedMessageContent) {
@@ -5384,10 +5460,11 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                 composeBody.parentElement?.parentElement?.parentElement;
         }
     } else if (platform === 'linkedin') {
-        const composeInput = adapter.findComposeInput();
+        const composeInput = adapter.findComposeInput(sendButton);
         if (composeInput) {
             composeContainer = composeInput.closest('[role="dialog"], .msg-form, .msg-s-message-list__compose-container') ||
-                composeInput.closest('form');
+                composeInput.closest('form') ||
+                composeInput.parentElement?.parentElement?.parentElement;
         }
     }
 
@@ -5709,9 +5786,40 @@ const observer = new MutationObserver(() => {
 });
 observer.observe(document.body, { childList: true, subtree: true });
 
+// SPA navigation handler — LinkedIn uses History API for client-side routing.
+// The MutationObserver + setInterval handle re-injection timing naturally.
+let _lastKnownUrl = window.location.href;
+const _handleUrlChange = () => {
+    if (window.location.href !== _lastKnownUrl) {
+        _lastKnownUrl = window.location.href;
+
+        // Clean up stale xReplAI buttons whose Send button context no longer exists.
+        // Preserve buttons in visible popup overlays to avoid flicker.
+        if (window.location.hostname.includes('linkedin.com')) {
+            const staleButtons = document.querySelectorAll('.responseable-button');
+            staleButtons.forEach(btn => {
+                const overlay = btn.closest('[class*="msg-overlay"]');
+                if (overlay && (overlay.offsetWidth > 0 || overlay.offsetHeight > 0)) return;
+                btn.remove();
+            });
+        }
+
+        // Re-inject immediately; the 1-second interval handles ongoing detection
+        injectGenerateButton();
+        injectCommentButton();
+    }
+};
+// Also listen for popstate (back/forward navigation)
+window.addEventListener('popstate', () => {
+    _handleUrlChange();
+});
+
 injectGenerateButton();
 injectCommentButton();
 setInterval(() => {
+    // Primary SPA navigation detection: check URL every tick.
+    // The title observer can break if LinkedIn replaces the <title> element.
+    _handleUrlChange();
     injectGenerateButton();
     injectCommentButton();
 }, 1000);
