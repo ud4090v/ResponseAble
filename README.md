@@ -38,7 +38,7 @@ Please open up an issue to nudge me to keep the npm packages up-to-date. FYI, it
 
 ## Documentation
 
-**xRepl.ai extension docs:** See **[docs/README.md](docs/README.md)** for the full index (specs, API calls, testing, reference). Obsolete/historical docs are in `docs/archive/`.
+**AI agents: Start with [AGENT_HANDBOOK.md](AGENT_HANDBOOK.md)** — single consolidated reference covering architecture, API calls, LinkedIn DOM, testing, and known issues.
 
 ## Installing and Running
 

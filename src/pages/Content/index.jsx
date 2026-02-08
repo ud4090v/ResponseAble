@@ -2425,13 +2425,10 @@ const platformAdapters = {
 
             const searchInRoot = (root) => {
                 const composeInputs = root.querySelectorAll(
-                    '[contenteditable="true"], [role="textbox"], textarea'
+                    '[contenteditable]:not([contenteditable="false"]), [role="textbox"], textarea'
                 );
 
                 for (const input of composeInputs) {
-                    // Must be visible
-                    if (input.offsetWidth === 0 && input.offsetHeight === 0) continue;
-
                     // Skip search boxes
                     const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
                     if (ariaLabel.includes('search')) continue;
@@ -2472,18 +2469,16 @@ const platformAdapters = {
             if (scopeNearButton) {
                 let ancestor = scopeNearButton.parentElement;
                 for (let depth = 0; depth < 15 && ancestor; depth++) {
-                    const editable = ancestor.querySelector('[contenteditable="true"], [role="textbox"], textarea');
-                    if (editable && (editable.offsetWidth > 0 || editable.offsetHeight > 0)) return editable;
+                    const editable = ancestor.querySelector('[contenteditable]:not([contenteditable="false"]), [role="textbox"], textarea');
+                    if (editable) return editable;
                     ancestor = ancestor.parentElement;
                 }
             }
-            // Fallback: any visible compose input on page
-            const inputs = document.querySelectorAll('[contenteditable="true"], [role="textbox"], textarea');
+            // Fallback: any compose input on page (skip search boxes)
+            const inputs = document.querySelectorAll('[contenteditable]:not([contenteditable="false"]), [role="textbox"], textarea');
             for (const input of inputs) {
-                if (input.offsetWidth > 0 || input.offsetHeight > 0) {
-                    const label = (input.getAttribute('aria-label') || '').toLowerCase();
-                    if (!label.includes('search')) return input;
-                }
+                const label = (input.getAttribute('aria-label') || '').toLowerCase();
+                if (!label.includes('search')) return input;
             }
             return null;
         },
@@ -2613,17 +2608,17 @@ const createIconOnlyButton = (buttonTooltip, platform) => {
     generateButton.setAttribute('aria-label', buttonTooltip);
     generateButton.setAttribute('data-tooltip', buttonTooltip);
 
-    // Add icon only - use raiconvector.png for LinkedIn comments
+    // Add icon only - use raicon.png for LinkedIn comments
     const runtime = getChromeRuntime();
     if (runtime && runtime.getURL) {
         try {
             const iconImg = document.createElement('img');
-            const iconUrl = runtime.getURL('raiconvector.png');
+            const iconUrl = runtime.getURL('raicon.png');
             iconImg.src = iconUrl;
             iconImg.alt = 'ResponseAble';
             iconImg.style.cssText = 'width: 20px !important; height: 20px !important; max-width: 20px !important; max-height: 20px !important; display: inline-block !important; vertical-align: middle !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important; position: relative !important;';
             iconImg.addEventListener('error', (e) => {
-                console.error('Failed to load raiconvector.png from:', iconUrl, e);
+                console.error('Failed to load raicon.png from:', iconUrl, e);
             });
             generateButton.appendChild(iconImg);
         } catch (error) {
@@ -2631,11 +2626,11 @@ const createIconOnlyButton = (buttonTooltip, platform) => {
             if (error.message && error.message.includes('Extension context invalidated')) {
                 console.warn('Extension context invalidated, icon not loaded');
             } else {
-                console.error('Error loading raiconvector.png icon:', error);
+                console.error('Error loading raicon.png icon:', error);
             }
         }
     } else {
-        console.warn('Chrome runtime not available for loading raiconvector.png');
+        console.warn('Chrome runtime not available for loading raicon.png');
     }
 
     // Icon-only button styling for LinkedIn comments
@@ -5547,7 +5542,7 @@ const createCommentButtonHandler = (editor) => {
             if (runtime) {
                 try {
                     const loadingImg = document.createElement('img');
-                    loadingImg.src = runtime.getURL('raiconvector.png');
+                    loadingImg.src = runtime.getURL('raicon.png');
                     loadingImg.style.cssText = 'width: 20px !important; height: 20px !important; opacity: 0.5;';
                     commentButton.appendChild(loadingImg);
                 } catch (e) { }
@@ -5620,7 +5615,7 @@ const createCommentButtonHandler = (editor) => {
                 if (runtime) {
                     try {
                         const iconImg = document.createElement('img');
-                        iconImg.src = runtime.getURL('raiconvector.png');
+                        iconImg.src = runtime.getURL('raicon.png');
                         iconImg.style.cssText = 'width: 20px !important; height: 20px !important;';
                         commentButton.appendChild(iconImg);
                     } catch (e) { }
@@ -5657,7 +5652,7 @@ const createCommentButtonHandler = (editor) => {
             if (runtime) {
                 try {
                     const iconImg = document.createElement('img');
-                    iconImg.src = runtime.getURL('raiconvector.png');
+                    iconImg.src = runtime.getURL('raicon.png');
                     iconImg.style.cssText = 'width: 20px !important; height: 20px !important;';
                     commentButton.appendChild(iconImg);
                 } catch (e) { }
@@ -5786,9 +5781,19 @@ const _handleUrlChange = () => {
             });
         }
 
-        // Re-inject immediately; the 1-second interval handles ongoing detection
-        injectGenerateButton();
-        injectCommentButton();
+        // Defer re-injection to next event-loop tick so LinkedIn's SPA
+        // framework finishes rendering the new DOM before we scan it.
+        setTimeout(() => {
+            injectGenerateButton();
+            injectCommentButton();
+        }, 0);
+
+        // Second attempt after 500ms — LinkedIn messaging page can be slow to render
+        if (window.location.pathname.startsWith('/messaging')) {
+            setTimeout(() => {
+                injectGenerateButton();
+            }, 500);
+        }
     }
 };
 // Also listen for popstate (back/forward navigation)
