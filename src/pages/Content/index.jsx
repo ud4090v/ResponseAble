@@ -52,6 +52,61 @@ let apiConfig = {
 // Fixed separator for parsing response variants - must match what we instruct AI to use
 const RESPONSE_VARIANT_SEPARATOR = '|||RESPONSE_VARIANT|||';
 
+// ── Draft cache — stores the last generated drafts so they can be recalled
+//    if the overlay is accidentally closed. Scoped to the current conversation
+//    context (URL + compose action) and auto-cleared on navigation. ──
+let _draftCache = null;
+const DRAFT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/** Build a conversation key from the current URL + compose context. */
+const getDraftCacheKey = () => {
+    const url = window.location.href.replace(/[?#].*$/, ''); // Strip query/hash noise
+    return url;
+};
+
+/** Save generated drafts to the in-memory cache. */
+const cacheDrafts = (draftsText, context, platform, classification, regenerateContext, newEmailParams) => {
+    _draftCache = {
+        draftsText,
+        context,
+        platform,
+        classification,
+        regenerateContext,
+        newEmailParams,
+        conversationKey: getDraftCacheKey(),
+        timestamp: Date.now()
+    };
+};
+
+/** Retrieve cached drafts if they match the current conversation and haven't expired. */
+const getCachedDrafts = () => {
+    if (!_draftCache) return null;
+    // Expired?
+    if (Date.now() - _draftCache.timestamp > DRAFT_CACHE_TTL_MS) {
+        _draftCache = null;
+        return null;
+    }
+    // Different conversation?
+    if (_draftCache.conversationKey !== getDraftCacheKey()) {
+        _draftCache = null;
+        return null;
+    }
+    return _draftCache;
+};
+
+/** Clear the draft cache (e.g. on navigation). */
+const clearDraftCache = () => { _draftCache = null; };
+
+// Watch for URL changes (SPA navigation) and clear the draft cache
+let _lastUrl = window.location.href;
+setInterval(() => {
+    const currentUrl = window.location.href;
+    if (currentUrl !== _lastUrl) {
+        _lastUrl = currentUrl;
+        clearDraftCache();
+    }
+}, 2000);
+
 // Get license key from storage (used by streaming and non-streaming API calls)
 const getLicenseKeyFromStorage = () => new Promise((resolve) => {
     const storage = typeof chrome !== 'undefined' ? chrome.storage : (typeof browser !== 'undefined' ? browser.storage : null);
@@ -1545,14 +1600,25 @@ const getRichContext = () => {
             recipientName = to.split(',')[0].split('<')[0].trim();
         }
     }
-    else if (window.location.href.includes('linkedin.com/messaging')) {
-        // LinkedIn Messaging
-        to = document.querySelector('.msg-conversation-list__participant-name, .msg-conversation-card__participant-name, .msg-conversation-listitem__participant-name')?.innerText?.trim() || '';
+    else if (window.location.href.includes('linkedin.com')) {
+        // LinkedIn Messaging — use Shadow-DOM-aware query for popup chat on /feed/
+        const participantNameSelectors = '.msg-overlay-bubble-header__title, .msg-thread__link-to-conversation, .msg-conversation-list__participant-name, .msg-conversation-card__participant-name, .msg-conversation-listitem__participant-name';
+        const participantEl = (typeof queryLinkedInOne === 'function')
+            ? queryLinkedInOne(participantNameSelectors)
+            : document.querySelector(participantNameSelectors);
+        to = participantEl?.innerText?.trim() || '';
         recipientName = to;
-        recipientCompany = document.querySelector('.msg-conversation-list__participant-headline, .msg-conversation-card__participant-headline')?.innerText?.trim() || '';
+        const headlineSelectors = '.msg-conversation-list__participant-headline, .msg-conversation-card__participant-headline';
+        const headlineEl = (typeof queryLinkedInOne === 'function')
+            ? queryLinkedInOne(headlineSelectors)
+            : document.querySelector(headlineSelectors);
+        recipientCompany = headlineEl?.innerText?.trim() || '';
 
-        // Current conversation thread
-        const messageBlocks = Array.from(document.querySelectorAll('.msg-s-message-list__message-body, .msg-s-event-listitem__body, .msg-s-message-listitem__message-body'));
+        // Current conversation thread (Shadow-DOM-aware)
+        const threadSelectors = '.msg-s-message-list__message-body, .msg-s-event-listitem__body, .msg-s-message-listitem__message-body';
+        const messageBlocks = (typeof queryLinkedInAll === 'function')
+            ? queryLinkedInAll(threadSelectors)
+            : Array.from(document.querySelectorAll(threadSelectors));
         const messages = messageBlocks
             .map(block => block.innerText?.trim() || block.textContent?.trim() || '')
             .filter(text => text && text.length > 0 && !text.includes('xReplAI') && !text.includes('Respond'))
@@ -2647,27 +2713,61 @@ const platformAdapters = {
                 })
                 .filter(text => text && text.length > 0 && !text.includes('xReplAI') && !text.includes('Respond'));
         },
-        // Get sender name from LinkedIn message
+        // Get sender name from LinkedIn message — the name of the OTHER person
+        // in the conversation (not the current user).
         getSenderName: () => {
-            // Strategy 1: BEM selectors (Shadow-DOM-aware)
-            const recipientName = queryLinkedInOne(
-                '.msg-conversation-card__participant-name, .msg-conversation-listitem__participant-name, .msg-s-message-list__conversation-header-name'
-            )?.innerText?.trim();
-            if (recipientName) return recipientName;
+            // Strategy 1: BEM selectors for conversation header (Shadow-DOM-aware)
+            // These target the participant name displayed at the top of the chat
+            const headerNameSelectors = [
+                '.msg-overlay-bubble-header__title',            // popup chat header
+                '.msg-thread__link-to-conversation',            // full messaging thread header
+                '.msg-conversation-card__participant-name',     // conversation card
+                '.msg-conversation-listitem__participant-name', // conversation list item
+                '.msg-s-message-list__conversation-header-name' // conversation header in message list
+            ].join(', ');
+            const headerNameEl = queryLinkedInOne(headerNameSelectors);
+            if (headerNameEl) {
+                const name = (headerNameEl.innerText || headerNameEl.textContent || '').trim();
+                // Filter out subject-like strings — a person name typically has
+                // at most a few capitalised words and no long descriptive phrases
+                if (name && name.length >= 2 && name.length <= 60 &&
+                    !/(messaging|linkedin|new message|compose|search)/i.test(name)) {
+                    return name;
+                }
+            }
 
-            // Strategy 2: Proximity-based — walk up from compose input to
-            // find a heading-like element with a person's name
+            // Strategy 2: Extract sender name from the last INBOUND message header.
+            // Walk backwards through message headers and find the first one that
+            // is NOT from "You" (the current user).
+            const messageHeaders = queryLinkedInAll(
+                '.msg-s-message-list__message-header, .msg-s-event-listitem__header'
+            );
+            for (let i = messageHeaders.length - 1; i >= 0; i--) {
+                const header = messageHeaders[i];
+                const nameElem = header.querySelector(
+                    '.msg-s-message-list__message-header-name, .msg-s-event-listitem__participant-name, .msg-s-message-group__name'
+                );
+                if (nameElem) {
+                    const sName = (nameElem.innerText || nameElem.textContent || '').trim();
+                    // Skip "You" — that's the current user
+                    if (sName && !/^you$/i.test(sName) && sName.length >= 2) {
+                        return sName;
+                    }
+                }
+            }
+
+            // Strategy 3: Proximity-based — walk up from compose input to
+            // find a profile link with the person's name
             const composeInput = platformAdapters.linkedin.findComposeInput();
             if (composeInput) {
                 let ancestor = composeInput.parentElement;
                 for (let depth = 0; depth < 15 && ancestor; depth++) {
-                    const headings = ancestor.querySelectorAll('h1, h2, h3, h4, [role="heading"]');
-                    for (const h of headings) {
-                        const name = (h.innerText || h.textContent || '').trim();
-                        // Must look like a person name: reasonable length,
-                        // not a generic UI label
+                    // Prefer profile links (most reliable name source)
+                    const profileLinks = ancestor.querySelectorAll('a[href*="/in/"]');
+                    for (const link of profileLinks) {
+                        const name = (link.innerText || link.textContent || '').trim();
                         if (name && name.length >= 2 && name.length <= 60 &&
-                            !/(messaging|linkedin|new message|compose|search)/i.test(name)) {
+                            !/(messaging|linkedin|view profile|new message|compose|search)/i.test(name)) {
                             return name;
                         }
                     }
@@ -2675,15 +2775,6 @@ const platformAdapters = {
                 }
             }
 
-            // Strategy 3: BEM message headers (Shadow-DOM-aware)
-            const messageHeaders = queryLinkedInAll('.msg-s-message-list__message-header, .msg-s-event-listitem__header');
-            if (messageHeaders.length > 0) {
-                const lastHeader = messageHeaders[messageHeaders.length - 1];
-                const nameElem = lastHeader.querySelector('.msg-s-message-list__message-header-name, .msg-s-event-listitem__participant-name');
-                if (nameElem) {
-                    return nameElem.innerText?.trim() || nameElem.textContent?.trim() || null;
-                }
-            }
             return null;
         },
         // Get context string for API
@@ -2737,7 +2828,8 @@ const platformAdapters = {
             };
 
             // ── Gather message list items (same strategies as getThreadMessages) ──
-            const bemListItemSelectors = '.msg-s-message-list__message, .msg-s-event-listitem, .msg-s-message-listitem';
+            // Include .msg-s-message-list__event (the actual <li> class) in selectors
+            const bemListItemSelectors = '.msg-s-message-list__event, .msg-s-message-list__message, .msg-s-event-listitem, .msg-s-message-listitem';
             let listItems = queryLinkedInAll(bemListItemSelectors);
 
             if (listItems.length === 0) {
@@ -2759,6 +2851,8 @@ const platformAdapters = {
                 }
             }
 
+            console.log('[ResponseAble DEBUG] getLastInboundMessageText scanning', listItems.length, 'items');
+
             // ── Walk backwards to find last inbound message ──
             for (let i = listItems.length - 1; i >= 0; i--) {
                 const item = listItems[i];
@@ -2770,36 +2864,108 @@ const platformAdapters = {
                 // Skip if the full text IS a system/deleted message
                 if (isSystemOrDeleted(fullText)) continue;
 
-                // ── Detect outbound (user's own) messages ──
-                // Method 1: CSS class on the element or ancestors (LinkedIn BEM convention)
-                let el = item;
+                // ── Detect direction: inbound (from other) vs outbound (from user) ──
+                // Uses LinkedIn's own BEM classes and a11y attributes, which are the
+                // most reliable signals based on actual DOM inspection.
                 let isOutbound = false;
-                for (let d = 0; d < 4 && el; d++) {
-                    if (/outbound|sent-message/i.test(el.className || '')) {
-                        isOutbound = true;
-                        break;
-                    }
-                    el = el.parentElement;
-                }
-                if (isOutbound) continue;
+                let isInbound = false;
+                let reason = '';
 
-                // Method 2: Sender label — LinkedIn shows "You" for outgoing messages
-                const headerEl = item.querySelector(
-                    '.msg-s-message-list__message-header-name, .msg-s-event-listitem__participant-name, ' +
-                    '[data-anonymize="person-name"], h4, h3'
-                );
-                const headerName = (headerEl?.innerText || headerEl?.textContent || '').trim();
-                if (/^you$/i.test(headerName)) continue;
+                // Method 1 (most reliable): BEM modifier class on the event-listitem div.
+                // LinkedIn marks messages with:
+                //   --other  → from the other person (inbound)
+                //   (no --other) → from the current user (outbound)
+                // Check the item itself and its immediate descendants.
+                const eventDiv = item.classList.contains('msg-s-event-listitem')
+                    ? item
+                    : item.querySelector('.msg-s-event-listitem, [class*="msg-s-event-listitem"]');
+                if (eventDiv) {
+                    const cls = eventDiv.className || '';
+                    if (/msg-s-event-listitem--other/i.test(cls)) {
+                        isInbound = true;
+                        reason = 'bem-class: --other';
+                    } else if (/msg-s-event-listitem\b/.test(cls) && !/msg-s-event-listitem--other/i.test(cls)) {
+                        // Has the base class but NOT the --other modifier → outbound
+                        isOutbound = true;
+                        reason = 'bem-class: no --other';
+                    }
+                }
+
+                // Method 2: A11y heading — LinkedIn includes a visually-hidden span:
+                //   "Edwin Silayo sent the following message at ..."  → inbound
+                //   "You sent the following message at ..."           → outbound
+                if (!isInbound && !isOutbound) {
+                    const a11yEl = item.querySelector(
+                        '.msg-s-event-listitem--group-a11y-heading, [class*="a11y-heading"]'
+                    );
+                    const a11yText = (a11yEl?.textContent || '').trim().toLowerCase();
+                    if (a11yText) {
+                        if (/^you\s+sent/i.test(a11yText)) {
+                            isOutbound = true;
+                            reason = 'a11y: "You sent"';
+                        } else if (/sent the following/i.test(a11yText)) {
+                            isInbound = true;
+                            reason = 'a11y: other person sent';
+                        }
+                    }
+                }
+
+                // Method 3: Sender name label — .msg-s-message-group__name
+                if (!isInbound && !isOutbound) {
+                    const nameEl = item.querySelector('.msg-s-message-group__name');
+                    const senderName = (nameEl?.innerText || nameEl?.textContent || '').trim();
+                    if (/^you$/i.test(senderName)) {
+                        isOutbound = true;
+                        reason = 'sender-label: "You"';
+                    } else if (senderName && senderName.length >= 2) {
+                        isInbound = true;
+                        reason = 'sender-label: ' + senderName;
+                    }
+                }
+
+                // Method 4: Profile picture — LinkedIn shows the other person's avatar
+                // next to their messages (.msg-s-event-listitem__profile-picture) but
+                // not next to yours.
+                if (!isInbound && !isOutbound) {
+                    const hasAvatar = item.querySelector(
+                        '.msg-s-event-listitem__profile-picture, img[src*="profile-displayphoto"]'
+                    );
+                    if (hasAvatar) {
+                        isInbound = true;
+                        reason = 'avatar-present';
+                    }
+                }
+
+                // Method 5 (fallback): CSS class patterns on ancestors/descendants
+                if (!isInbound && !isOutbound) {
+                    const outboundPatterns = /outbound|sent-message|from-self|align-right|current-user/i;
+                    let el = item;
+                    for (let d = 0; d < 6 && el; d++) {
+                        if (outboundPatterns.test(el.className || '')) {
+                            isOutbound = true;
+                            reason = 'css-fallback';
+                            break;
+                        }
+                        el = el.parentElement;
+                    }
+                }
+
+                console.log('[ResponseAble DEBUG] item', i, isOutbound ? 'OUTBOUND' : (isInbound ? 'INBOUND' : 'UNKNOWN'),
+                    'via:', reason || 'none',
+                    '| text:', fullText.substring(0, 60).replace(/\n/g, ' ') + '...');
+
+                if (isOutbound) continue;
 
                 // ── Extract body text (prefer specific body selectors over full item text) ──
                 const bodyEl = item.querySelector(
-                    '.msg-s-message-list__message-body, .msg-s-event-listitem__body, ' +
-                    '.msg-s-message-listitem__message-body, p'
+                    '.msg-s-event-listitem__body, .msg-s-message-list__message-body, ' +
+                    '.msg-s-message-listitem__message-body, .msg-s-event__content p'
                 );
                 const messageBody = (bodyEl?.innerText?.trim()) || fullText;
 
                 // Final check: body itself shouldn't be a system message
                 if (messageBody.length > 3 && !isSystemOrDeleted(messageBody)) {
+                    console.log('[ResponseAble DEBUG] → Selected as sourceMessageText:', messageBody.substring(0, 80) + '...');
                     return messageBody;
                 }
             }
@@ -3171,6 +3337,73 @@ const injectGenerateButton = () => {
                 showLicenseRequiredPopup();
                 return;
             }
+
+            // ── Check for cached drafts from a previous generation in this conversation ──
+            const cached = getCachedDrafts();
+            if (cached) {
+                // Show a lightweight prompt: restore previous drafts or generate new?
+                const existingPrompt = document.querySelector('.responseable-restore-prompt');
+                if (existingPrompt) existingPrompt.remove();
+
+                const prompt = document.createElement('div');
+                prompt.className = 'responseable-overlay responseable-restore-prompt';
+                prompt.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2147483647; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;';
+                prompt.innerHTML = `
+                    <div style="background: white; border-radius: 12px; padding: 24px 28px; max-width: 380px; box-shadow: 0 8px 30px rgba(0,0,0,0.18); text-align: center; font-size: 16px; line-height: 1.5;">
+                        <div style="font-size: 15px; font-weight: 600; color: #333; margin-bottom: 16px;">
+                            Previous drafts are available for this conversation.
+                        </div>
+                        <div style="display: flex; gap: 10px; justify-content: center;">
+                            <button id="responseable-restore-btn" style="padding: 8px 18px; border-radius: 8px; background: #D3E3FD; color: #444746; border: none; cursor: pointer; font-size: 14px; font-weight: 600;">
+                                Restore Drafts
+                            </button>
+                            <button id="responseable-generate-new-btn" style="padding: 8px 18px; border-radius: 8px; background: #f3f3f5; color: #333; border: 1px solid #ddd; cursor: pointer; font-size: 14px; font-weight: 600;">
+                                Generate New
+                            </button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(prompt);
+
+                // Wait for user choice
+                const userChoice = await new Promise((resolve) => {
+                    prompt.querySelector('#responseable-restore-btn').addEventListener('click', () => resolve('restore'));
+                    prompt.querySelector('#responseable-generate-new-btn').addEventListener('click', () => resolve('new'));
+                    // Clicking the backdrop dismisses (same as cancel/close)
+                    prompt.addEventListener('click', (e) => {
+                        if (e.target === prompt) resolve('dismiss');
+                    });
+                    // Escape key dismisses
+                    const escHandler = (e) => {
+                        if (e.key === 'Escape') {
+                            document.removeEventListener('keydown', escHandler);
+                            resolve('dismiss');
+                        }
+                    };
+                    document.addEventListener('keydown', escHandler);
+                });
+                prompt.remove();
+
+                if (userChoice === 'restore') {
+                    // Re-show the drafts overlay with the cached data (no API call)
+                    await showDraftsOverlay(
+                        cached.draftsText,
+                        cached.context,
+                        cached.platform,
+                        null,  // adapter (will use default for platform)
+                        cached.classification,
+                        cached.regenerateContext,
+                        cached.newEmailParams
+                    );
+                    return;
+                }
+                if (userChoice === 'dismiss') {
+                    return; // User cancelled — do nothing
+                }
+                // userChoice === 'new' → fall through to normal generation
+                clearDraftCache(); // Clear cache since user wants fresh generation
+            }
+
             // Get context for API call using enhanced context extraction
             const richContext = getRichContext();
 
@@ -5149,6 +5382,10 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     // Track draft generation (only for final, non-streaming overlays)
     const roleName = classification?.type || 'generic';
     trackDraftGenerated(roleName).catch(err => console.warn('Failed to track draft generation:', err));
+
+    // Cache the generated drafts so they can be recalled if the overlay is
+    // accidentally closed (only for the final render, not streaming partials).
+    cacheDrafts(draftsText, context, platform, classification, regenerateContext, newEmailParams);
 
     // Remove existing overlay for final render (including streaming overlay)
     document.querySelector('.responseable-overlay')?.remove();
