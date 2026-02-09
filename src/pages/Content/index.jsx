@@ -5781,19 +5781,25 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                         : currentTone;
 
                     // Generate drafts for this goal
+                    const goalClassification = { ...classification, _currentGoal: goal, _currentVariantSet: goalVariantSet, _currentTone: goalTone };
                     await generateDraftsWithTone(
                         regenerateContext.richContext,
                         regenerateContext.sourceMessageText,
                         platform,
-                        { ...classification, _currentGoal: goal, _currentVariantSet: goalVariantSet, _currentTone: goalTone },
+                        goalClassification,
                         goalTone,
                         regenerateContext.senderName,
                         regenerateContext.recipientName,
                         regenerateContext.recipientCompany,
                         adapter,
-                        async (newDraftsText) => {
-                            // Re-render the drafts with new goal
-                            await showDraftsOverlay(newDraftsText, regenerateContext.context, platform, adapter, { ...classification, _currentGoal: goal, _currentVariantSet: goalVariantSet, _currentTone: goalTone }, regenerateContext);
+                        async (newDraftsText, isPartial = false) => {
+                            if (isPartial) {
+                                // During streaming, keep the loading indicator visible
+                                // in the existing overlay — don't create new overlays
+                                return;
+                            }
+                            // Final content — create full drafts overlay with all handlers
+                            await showDraftsOverlay(newDraftsText, regenerateContext.context, platform, adapter, goalClassification, regenerateContext);
                         },
                         regenerateContext  // Pass regenerateContext
                     );
@@ -5956,7 +5962,12 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                         contextToUse.recipientName,
                         contextToUse.recipientCompany,
                         adapter,
-                        async (newDraftsText) => {
+                        async (newDraftsText, isPartial = false) => {
+                            if (isPartial) {
+                                // During streaming, keep the loading indicator visible
+                                // in the existing overlay — don't create new overlays
+                                return;
+                            }
                             // Re-render the drafts with new tone
                             if (isNewEmail) {
                                 // For new emails, pass newEmailParams
