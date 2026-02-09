@@ -10,6 +10,7 @@ All extension documentation has been consolidated into a single handbook for AI 
 |-----|-------------|
 | [AGENT_HANDBOOK.md](../AGENT_HANDBOOK.md) | **Start here.** Complete reference: architecture, API calls, LinkedIn DOM, testing, known issues |
 | [README.md](../README.md) | Repo setup, install, build (Chrome extension boilerplate) |
+| [FUTURE_ENHANCEMENTS.md](FUTURE_ENHANCEMENTS.md) | Planned improvements, technical debt, and architectural ideas for future releases |
 
 ---
 

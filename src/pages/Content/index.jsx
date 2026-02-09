@@ -3,17 +3,40 @@ import { createRoot } from 'react-dom/client';
 import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
 import { trackDraftGenerated, trackDraftInserted, trackThumbsUp, trackThumbsDown } from './metrics.js';
 
-// Ensure chrome API is available
+// Ensure chrome API is available.
+// chrome.runtime.id is the definitive check: it is undefined when the
+// extension context has been invalidated (e.g. after extension reload
+// before the page is refreshed) or inside iframes without extension access.
 const getChromeRuntime = () => {
-    if (typeof chrome !== 'undefined' && chrome.runtime) {
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
         return chrome.runtime;
     }
-    if (typeof browser !== 'undefined' && browser.runtime) {
+    if (typeof browser !== 'undefined' && browser.runtime && browser.runtime.id) {
         return browser.runtime;
     }
-    console.error('Chrome runtime API not available');
+    // Only warn (not error) — expected in iframes and after extension reloads
+    console.warn('xReplAI: Chrome runtime API not available (iframe or stale context)');
     return null;
 };
+
+// Retry wrapper: waits for chrome.runtime to become available (MV3 service worker startup)
+const waitForChromeRuntime = (maxRetries = 5, delayMs = 200) => new Promise((resolve) => {
+    let attempts = 0;
+    const check = () => {
+        const runtime = getChromeRuntime();
+        if (runtime) {
+            resolve(runtime);
+            return;
+        }
+        attempts++;
+        if (attempts < maxRetries) {
+            setTimeout(check, delayMs);
+        } else {
+            resolve(null);
+        }
+    };
+    check();
+});
 
 // API configuration - loaded from Chrome storage
 let apiConfig = {
@@ -1560,6 +1583,29 @@ const getRichContext = () => {
     };
 };
 
+// ── LinkedIn Shadow DOM + proximity helpers ─────────────────────────
+// LinkedIn renders the messaging popup (on /feed/) inside a Shadow DOM
+// boundary at #interop-outlet.  These helpers ensure all adapter methods
+// reach elements in both the main document and the shadow root.
+
+/** querySelectorAll across document + LinkedIn shadow root */
+const queryLinkedInAll = (selector) => {
+    const results = Array.from(document.querySelectorAll(selector));
+    const shadowHost = document.querySelector('#interop-outlet');
+    if (shadowHost?.shadowRoot) {
+        results.push(...shadowHost.shadowRoot.querySelectorAll(selector));
+    }
+    return results;
+};
+
+/** querySelector across document + LinkedIn shadow root */
+const queryLinkedInOne = (selector) => {
+    const result = document.querySelector(selector);
+    if (result) return result;
+    const shadowHost = document.querySelector('#interop-outlet');
+    return shadowHost?.shadowRoot?.querySelector(selector) || null;
+};
+
 // Platform-specific adapters
 const platformAdapters = {
     gmail: {
@@ -2474,8 +2520,8 @@ const platformAdapters = {
                     ancestor = ancestor.parentElement;
                 }
             }
-            // Fallback: any compose input on page (skip search boxes)
-            const inputs = document.querySelectorAll('[contenteditable]:not([contenteditable="false"]), [role="textbox"], textarea');
+            // Fallback: any compose input on page + shadow root (skip search boxes)
+            const inputs = queryLinkedInAll('[contenteditable]:not([contenteditable="false"]), [role="textbox"], textarea');
             for (const input of inputs) {
                 const label = (input.getAttribute('aria-label') || '').toLowerCase();
                 if (!label.includes('search')) return input;
@@ -2484,48 +2530,74 @@ const platformAdapters = {
         },
         // Find recipient field (LinkedIn shows recipient name, not input)
         findRecipientField: () => {
-            // LinkedIn shows recipient in header, try to find it
-            return document.querySelector('.msg-conversation-card__participant-name, .msg-conversation-listitem__participant-name');
+            // LinkedIn shows recipient in header — search document + shadow root
+            return queryLinkedInOne('.msg-conversation-card__participant-name, .msg-conversation-listitem__participant-name');
         },
         // No subject field in LinkedIn
         findSubjectField: () => null,
         // Multi-factor detection: Check if compose action is Reply, Forward, or New Email
-        // LinkedIn messaging is simpler - mostly conversation-based
+        // Uses proximity-based traversal from compose input (works across Shadow DOM
+        // and survives LinkedIn class-name changes).
         detectComposeAction: () => {
             const composeInput = platformAdapters.linkedin.findComposeInput();
             if (!composeInput) return 'new';
 
             const composeText = composeInput.innerText || composeInput.textContent || '';
 
-            // Check for Forward patterns in content (LinkedIn rarely has forwards, but check anyway)
+            // ── 1. Text-pattern checks (cheap, reliable) ──
             const forwardPatterns = [
                 /-{3,}\s*Forwarded message\s*-{3,}/i,
                 /Begin forwarded message:/i,
                 /^From:\s+.+\n(Sent|Date):\s+/im,
                 /^Original Message\s*-+/im
             ];
-
             for (const pattern of forwardPatterns) {
-                if (pattern.test(composeText)) {
-                    return 'forward';
-                }
+                if (pattern.test(composeText)) return 'forward';
             }
 
-            // Check for Reply patterns
             const replyPatterns = [
                 /On\s+.+?,\s+.+?\s*<[^>]+>\s*wrote:/i,
                 /On\s+.+?,\s+.+?\s+wrote:/i
             ];
-
             for (const pattern of replyPatterns) {
-                if (pattern.test(composeText)) {
-                    return 'reply';
-                }
+                if (pattern.test(composeText)) return 'reply';
             }
 
-            // Check if there are existing messages in the conversation (indicates reply)
-            const existingMessages = document.querySelectorAll('.msg-s-message-list__message, .msg-s-event-listitem, .msg-s-message-listitem');
-            if (existingMessages.length > 0) {
+            // ── 2. Proximity-based: walk UP from compose input ──
+            // Look for message elements inside ancestor subtree.
+            // This works even inside Shadow DOM because we start from
+            // the compose input which was already found successfully.
+            const bemMessageSelectors = '.msg-s-message-list__message, .msg-s-event-listitem, .msg-s-message-listitem';
+            let ancestor = composeInput.parentElement;
+            for (let depth = 0; depth < 15 && ancestor; depth++) {
+                // 2a. BEM class check scoped to this subtree
+                if (ancestor.querySelectorAll(bemMessageSelectors).length > 0) {
+                    return 'reply';
+                }
+
+                // 2b. Generic structural check: look for a sibling container
+                //     that has multiple list-item-like children with text
+                //     (the message list pattern: <ul role="list"> or repeated
+                //     [role="listitem"] / [role="row"] / <li> elements)
+                for (const child of ancestor.children) {
+                    if (child.contains(composeInput)) continue; // skip compose area
+                    const listItems = child.querySelectorAll('[role="listitem"], [role="row"], li');
+                    if (listItems.length >= 2) {
+                        let textBearing = 0;
+                        for (const item of listItems) {
+                            if ((item.innerText || item.textContent || '').trim().length > 10) {
+                                textBearing++;
+                            }
+                            if (textBearing >= 2) return 'reply';
+                        }
+                    }
+                }
+
+                ancestor = ancestor.parentElement;
+            }
+
+            // ── 3. Fallback: Shadow-DOM-aware global BEM check ──
+            if (queryLinkedInAll(bemMessageSelectors).length > 0) {
                 return 'reply';
             }
 
@@ -2543,9 +2615,32 @@ const platformAdapters = {
         },
         // Get thread messages for context
         getThreadMessages: () => {
-            // Find all message content in LinkedIn conversation
-            const messages = Array.from(document.querySelectorAll('.msg-s-message-list__message-body, .msg-s-event-listitem__body, .msg-s-message-listitem__message-body'));
-            return messages
+            // Strategy 1: BEM selectors (Shadow-DOM-aware)
+            const bemBodySelectors = '.msg-s-message-list__message-body, .msg-s-event-listitem__body, .msg-s-message-listitem__message-body';
+            let elements = queryLinkedInAll(bemBodySelectors);
+
+            // Strategy 2: Proximity-based — walk up from compose input and
+            // find a sibling container with list-item children (message list)
+            if (elements.length === 0) {
+                const composeInput = platformAdapters.linkedin.findComposeInput();
+                if (composeInput) {
+                    let ancestor = composeInput.parentElement;
+                    outer:
+                    for (let depth = 0; depth < 15 && ancestor; depth++) {
+                        for (const child of ancestor.children) {
+                            if (child.contains(composeInput)) continue;
+                            const listItems = child.querySelectorAll('[role="listitem"], [role="row"], li');
+                            if (listItems.length >= 2) {
+                                elements = Array.from(listItems);
+                                break outer;
+                            }
+                        }
+                        ancestor = ancestor.parentElement;
+                    }
+                }
+            }
+
+            return elements
                 .map(msg => {
                     const text = msg.innerText?.trim() || msg.textContent?.trim() || '';
                     return text;
@@ -2554,14 +2649,34 @@ const platformAdapters = {
         },
         // Get sender name from LinkedIn message
         getSenderName: () => {
-            // The recipient name in a conversation is the sender when replying
-            // For LinkedIn, the participant name is the person you're messaging with
-            const recipientName = document.querySelector('.msg-conversation-card__participant-name, .msg-conversation-listitem__participant-name, .msg-s-message-list__conversation-header-name')?.innerText?.trim();
-            if (recipientName) {
-                return recipientName;
+            // Strategy 1: BEM selectors (Shadow-DOM-aware)
+            const recipientName = queryLinkedInOne(
+                '.msg-conversation-card__participant-name, .msg-conversation-listitem__participant-name, .msg-s-message-list__conversation-header-name'
+            )?.innerText?.trim();
+            if (recipientName) return recipientName;
+
+            // Strategy 2: Proximity-based — walk up from compose input to
+            // find a heading-like element with a person's name
+            const composeInput = platformAdapters.linkedin.findComposeInput();
+            if (composeInput) {
+                let ancestor = composeInput.parentElement;
+                for (let depth = 0; depth < 15 && ancestor; depth++) {
+                    const headings = ancestor.querySelectorAll('h1, h2, h3, h4, [role="heading"]');
+                    for (const h of headings) {
+                        const name = (h.innerText || h.textContent || '').trim();
+                        // Must look like a person name: reasonable length,
+                        // not a generic UI label
+                        if (name && name.length >= 2 && name.length <= 60 &&
+                            !/(messaging|linkedin|new message|compose|search)/i.test(name)) {
+                            return name;
+                        }
+                    }
+                    ancestor = ancestor.parentElement;
+                }
             }
-            // Fallback: try to find name in message headers
-            const messageHeaders = document.querySelectorAll('.msg-s-message-list__message-header, .msg-s-event-listitem__header');
+
+            // Strategy 3: BEM message headers (Shadow-DOM-aware)
+            const messageHeaders = queryLinkedInAll('.msg-s-message-list__message-header, .msg-s-event-listitem__header');
             if (messageHeaders.length > 0) {
                 const lastHeader = messageHeaders[messageHeaders.length - 1];
                 const nameElem = lastHeader.querySelector('.msg-s-message-list__message-header-name, .msg-s-event-listitem__participant-name');
@@ -2573,7 +2688,7 @@ const platformAdapters = {
         },
         // Get context string for API
         getContext: () => {
-            const recipientName = document.querySelector('.msg-conversation-card__participant-name, .msg-conversation-listitem__participant-name')?.innerText?.trim() || '';
+            const recipientName = queryLinkedInOne('.msg-conversation-card__participant-name, .msg-conversation-listitem__participant-name')?.innerText?.trim() || '';
             const threadMessages = platformAdapters.linkedin.getThreadMessages();
             const previousThread = threadMessages.length > 1
                 ? threadMessages.slice(0, -1).reverse().join('\n\n---\n\n')
@@ -2582,17 +2697,150 @@ const platformAdapters = {
                 ? `To: ${recipientName}\n\nPrevious conversation:\n${previousThread}`
                 : `To: ${recipientName}`;
         },
-        // Insert text into compose field, optionally scoped near a send button
+        // Find the last meaningful message from the OTHER person in the thread.
+        // Walks backwards through the message list, skipping:
+        //   - Deleted messages ("This message has been deleted")
+        //   - System/status messages (timestamps, "seen", "delivered")
+        //   - The user's own messages (detected via "outbound" CSS class or "You" sender label)
+        // Returns the message body text, or '' if nothing suitable found.
+        getLastInboundMessageText: () => {
+            // Substrings that indicate a deleted or system message.
+            // Uses .includes() (case-insensitive) instead of ^...$ regex
+            // because the extracted text may contain sender name + timestamp
+            // around the actual message body.
+            const deletedSubstrings = [
+                'this message has been deleted',
+                'this message was deleted',
+                'message deleted',
+                'unsent a message',
+                'you unsent a message',
+                'you deleted this message',
+            ];
+            // Exact-match patterns for bare status labels
+            const exactPatterns = [
+                /^\d{1,2}:\d{2}\s*(AM|PM)?$/i,   // bare timestamp
+                /^seen$/i,
+                /^delivered$/i,
+                /^sent$/i,
+                /^new messages$/i,
+                /^today$/i,
+                /^yesterday$/i,
+            ];
+            const isSystemOrDeleted = (text) => {
+                const t = text.trim();
+                if (t.length < 3) return true;
+                const lower = t.toLowerCase();
+                // Substring check for deleted/system messages
+                if (deletedSubstrings.some(s => lower.includes(s))) return true;
+                // Exact match for bare status labels
+                return exactPatterns.some(p => p.test(t));
+            };
+
+            // ── Gather message list items (same strategies as getThreadMessages) ──
+            const bemListItemSelectors = '.msg-s-message-list__message, .msg-s-event-listitem, .msg-s-message-listitem';
+            let listItems = queryLinkedInAll(bemListItemSelectors);
+
+            if (listItems.length === 0) {
+                const composeInput = platformAdapters.linkedin.findComposeInput();
+                if (composeInput) {
+                    let ancestor = composeInput.parentElement;
+                    outer:
+                    for (let depth = 0; depth < 15 && ancestor; depth++) {
+                        for (const child of ancestor.children) {
+                            if (child.contains(composeInput)) continue;
+                            const items = child.querySelectorAll('[role="listitem"], [role="row"], li');
+                            if (items.length >= 2) {
+                                listItems = Array.from(items);
+                                break outer;
+                            }
+                        }
+                        ancestor = ancestor.parentElement;
+                    }
+                }
+            }
+
+            // ── Walk backwards to find last inbound message ──
+            for (let i = listItems.length - 1; i >= 0; i--) {
+                const item = listItems[i];
+                const fullText = item.innerText?.trim() || item.textContent?.trim() || '';
+
+                // Skip extension UI noise
+                if (fullText.includes('xReplAI') || fullText.includes('Respond')) continue;
+
+                // Skip if the full text IS a system/deleted message
+                if (isSystemOrDeleted(fullText)) continue;
+
+                // ── Detect outbound (user's own) messages ──
+                // Method 1: CSS class on the element or ancestors (LinkedIn BEM convention)
+                let el = item;
+                let isOutbound = false;
+                for (let d = 0; d < 4 && el; d++) {
+                    if (/outbound|sent-message/i.test(el.className || '')) {
+                        isOutbound = true;
+                        break;
+                    }
+                    el = el.parentElement;
+                }
+                if (isOutbound) continue;
+
+                // Method 2: Sender label — LinkedIn shows "You" for outgoing messages
+                const headerEl = item.querySelector(
+                    '.msg-s-message-list__message-header-name, .msg-s-event-listitem__participant-name, ' +
+                    '[data-anonymize="person-name"], h4, h3'
+                );
+                const headerName = (headerEl?.innerText || headerEl?.textContent || '').trim();
+                if (/^you$/i.test(headerName)) continue;
+
+                // ── Extract body text (prefer specific body selectors over full item text) ──
+                const bodyEl = item.querySelector(
+                    '.msg-s-message-list__message-body, .msg-s-event-listitem__body, ' +
+                    '.msg-s-message-listitem__message-body, p'
+                );
+                const messageBody = (bodyEl?.innerText?.trim()) || fullText;
+
+                // Final check: body itself shouldn't be a system message
+                if (messageBody.length > 3 && !isSystemOrDeleted(messageBody)) {
+                    return messageBody;
+                }
+            }
+
+            // Absolute fallback: return last non-system message from getThreadMessages()
+            const threadMessages = platformAdapters.linkedin.getThreadMessages();
+            for (let i = threadMessages.length - 1; i >= 0; i--) {
+                if (!isSystemOrDeleted(threadMessages[i])) {
+                    return threadMessages[i];
+                }
+            }
+            return '';
+        },
+        // Insert text into compose field, optionally scoped near a send button.
+        // Uses document.execCommand('insertText') (same technique as Gmail adapter)
+        // so that LinkedIn's framework recognises the content change, updates its
+        // internal state, removes placeholder styling, and keeps the text on
+        // subsequent keystrokes.  Direct DOM writes (innerText/innerHTML) bypass
+        // the framework, leaving the text in a "phantom placeholder" state.
         insertText: (text, scopeNearButton) => {
             const composeInput = platformAdapters.linkedin.findComposeInput(scopeNearButton);
             if (composeInput) {
                 composeInput.focus();
-                // For contenteditable divs, we need to set the text differently
-                composeInput.innerHTML = '';
-                composeInput.innerText = text;
-                // Trigger input event for LinkedIn
-                const inputEvent = new Event('input', { bubbles: true });
-                composeInput.dispatchEvent(inputEvent);
+
+                // execCommand operates on the currently-focused editing host,
+                // which works even when the contenteditable is inside a Shadow DOM.
+                const cleared = document.execCommand('selectAll', false, null) &&
+                                document.execCommand('delete', false, null);
+                const inserted = cleared && document.execCommand('insertText', false, text);
+
+                if (!inserted) {
+                    // Fallback: direct DOM write + synthetic InputEvent
+                    // (better than nothing if execCommand is unsupported)
+                    composeInput.innerHTML = '';
+                    composeInput.innerText = text;
+                    composeInput.dispatchEvent(new InputEvent('input', {
+                        bubbles: true,
+                        inputType: 'insertText',
+                        data: text
+                    }));
+                }
             }
         },
         // Button CSS classes (LinkedIn uses different classes)
@@ -2664,10 +2912,11 @@ const updateButtonText = (button, newText) => {
     }
 
     // Apply button glow animation during status updates
+    // Use classList toggle instead of style.animation to avoid corrupting inline styles
     if (isStatusUpdate) {
-        button.style.animation = 'responseable-button-glow 1.5s ease-in-out infinite';
+        button.classList.add('responseable-button-working');
     } else {
-        button.style.animation = 'none';
+        button.classList.remove('responseable-button-working');
     }
 
     // Find the text span or create one
@@ -2725,14 +2974,28 @@ const updateButtonText = (button, newText) => {
     }
 };
 
+// Button inline styles — set once at creation and re-applied after generation.
+// Safe because no code modifies individual style.* properties on the button;
+// we use classList and disabled attribute for state changes instead.
+const LINKEDIN_BUTTON_STYLE = 'display: inline-flex !important; align-items: center !important; padding: 4px 12px !important; margin: 0 8px 0 4px !important; border-radius: 16px !important; background: #D3E3FD !important; color: #444746 !important; border: none !important; cursor: pointer !important; font-size: 14px !important; font-weight: 600 !important; height: 28px !important; line-height: 20px !important; min-width: auto !important; vertical-align: middle !important; align-self: center !important;';
+const GMAIL_BUTTON_STYLE = 'display: inline-flex !important; align-items: center !important; padding: 0px 12px 0px 8px !important; margin: 0 1px !important; border-radius: 0px !important; background: #D3E3FD !important; font-weight: bold !important; color: #444746 !important; border: none !important; cursor: pointer !important; font-size: 14px !important;';
+
+/** Reset button to resting state — re-applies full inline style. */
+const resetButtonStyle = (button, platform) => {
+    button.style.cssText = platform === 'linkedin' ? LINKEDIN_BUTTON_STYLE : GMAIL_BUTTON_STYLE;
+    button.classList.remove('responseable-button-working');
+};
+
 const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
     const generateButton = document.createElement('button');
     generateButton.type = 'button';
 
-    // Inject CSS keyframes for icon pulse animation (only once)
-    if (!document.querySelector('#responseable-button-animations')) {
+    // Inject button styles + keyframe animations (only once)
+    // Using a stylesheet instead of inline styles prevents Chrome from
+    // dropping !important flags when individual style.* properties are modified.
+    if (!document.querySelector('#responseable-button-styles')) {
         const styleSheet = document.createElement('style');
-        styleSheet.id = 'responseable-button-animations';
+        styleSheet.id = 'responseable-button-styles';
         styleSheet.textContent = `
             @keyframes responseable-icon-pulse {
                 0%, 100% { transform: scale(1); }
@@ -2746,6 +3009,82 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
                 0%, 60%, 100% { transform: translateY(0); }
                 30% { transform: translateY(-4px); }
             }
+
+            /* ── Working state (glow animation during generation) ── */
+            button.responseable-button.responseable-button-working {
+                animation: responseable-button-glow 1.5s ease-in-out infinite !important;
+            }
+
+            /* ── LinkedIn button styles ── */
+            button.responseable-button.responseable-linkedin-button {
+                display: inline-flex !important;
+                align-items: center !important;
+                padding: 4px 12px !important;
+                margin: 0 8px 0 4px !important;
+                border-radius: 16px !important;
+                background: #D3E3FD !important;
+                color: #444746 !important;
+                border: none !important;
+                cursor: pointer !important;
+                font-size: 14px !important;
+                font-weight: 600 !important;
+                height: 28px !important;
+                line-height: 20px !important;
+                min-width: auto !important;
+                opacity: 1 !important;
+                vertical-align: middle !important;
+                align-self: center !important;
+            }
+            button.responseable-button.responseable-linkedin-button:hover {
+                background: #BDD3F9 !important;
+            }
+            button.responseable-button.responseable-linkedin-button:disabled {
+                opacity: 0.7 !important;
+            }
+            button.responseable-button.responseable-linkedin-button img {
+                width: 16px !important;
+                height: 16px !important;
+                max-width: 16px !important;
+                max-height: 16px !important;
+                display: inline-block !important;
+                vertical-align: middle !important;
+                margin-right: 6px !important;
+                opacity: 1 !important;
+                visibility: visible !important;
+                object-fit: contain !important;
+                flex-shrink: 0 !important;
+            }
+
+            /* ── Gmail button styles ── */
+            button.responseable-button:not(.responseable-linkedin-button):not(.responseable-comment-button):disabled {
+                opacity: 0.7 !important;
+            }
+            button.responseable-button:not(.responseable-linkedin-button):not(.responseable-comment-button) {
+                display: inline-flex !important;
+                align-items: center !important;
+                padding: 0px 12px 0px 8px !important;
+                margin: 0 1px !important;
+                border-radius: 0px !important;
+                background: #D3E3FD !important;
+                font-weight: bold !important;
+                color: #444746 !important;
+                border: none !important;
+                cursor: pointer !important;
+                font-size: 14px !important;
+            }
+            button.responseable-button:not(.responseable-linkedin-button):not(.responseable-comment-button) img {
+                width: 20px !important;
+                height: 20px !important;
+                max-width: 28px !important;
+                max-height: 28px !important;
+                display: inline-block !important;
+                vertical-align: middle !important;
+                margin-right: 6px !important;
+                opacity: 1 !important;
+                visibility: visible !important;
+                object-fit: contain !important;
+                flex-shrink: 0 !important;
+            }
         `;
         document.head.appendChild(styleSheet);
     }
@@ -2757,7 +3096,8 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
             const iconImg = document.createElement('img');
             iconImg.src = runtime.getURL('xrepl-dark.png');
             iconImg.alt = 'xRepl.ai';
-            // Platform-specific icon sizing
+            // Inline icon styles are safe (set once, never modified by JS).
+            // CSS class rules exist as backup, but inline ensures LinkedIn can't override.
             if (platform === 'linkedin') {
                 iconImg.style.cssText = 'width: 16px !important; height: 16px !important; max-width: 16px !important; max-height: 16px !important; display: inline-block !important; vertical-align: middle !important; margin-right: 6px !important; opacity: 1 !important; visibility: visible !important; object-fit: contain !important; flex-shrink: 0 !important;';
             } else {
@@ -2774,14 +3114,8 @@ const createButton = (buttonText, buttonTooltip, buttonClass, platform) => {
     generateButton.className = `${buttonClass} responseable-button${platform === 'linkedin' ? ' responseable-linkedin-button' : ''}`;
     generateButton.setAttribute('data-tooltip', buttonTooltip);
 
-    // Platform-specific styling
-    if (platform === 'linkedin') {
-        // LinkedIn style: skinnier button with more rounded corners, matching Send button
-        generateButton.style.cssText = 'display: inline !important; align-items: center !important; padding: 4px 12px !important; margin: 0 8px 0 4px !important; border-radius: 16px !important; background: #D3E3FD !important; color: #444746 !important; border: none !important; cursor: pointer !important; font-size: 14px !important; font-weight: 600 !important; height: 28px !important; line-height: 20px !important; min-width: auto !important;';
-    } else {
-        // Gmail style: original styling
-        generateButton.style.cssText = 'display: inline-flex !important; align-items: center !important; padding: 0px 12px 0px 8px !important; !important; margin: 0 1px !important; border-radius: 0px !important; background: #D3E3FD !important; font-weight: bold !important; color: #444746 !important; border: none !important; cursor: pointer !important; font-size: 14px !important;';
-    }
+    // Apply inline styles (set once, never modified by JS after this point)
+    generateButton.style.cssText = platform === 'linkedin' ? LINKEDIN_BUTTON_STYLE : GMAIL_BUTTON_STYLE;
 
     return generateButton;
 };
@@ -2943,16 +3277,24 @@ const injectGenerateButton = () => {
 
             // Fallback: if getRepliedToEmailDetails didn't work or didn't return body, use the old method
             if (isReply && !sourceMessageText) {
-                const emailBeingRepliedTo = adapter.getEmailBeingRepliedTo
-                    ? adapter.getEmailBeingRepliedTo()
-                    : null;
-
-                if (emailBeingRepliedTo) {
-                    sourceMessageText = emailBeingRepliedTo.innerText?.trim() || emailBeingRepliedTo.textContent?.trim() || '';
+                // LinkedIn: use smart inbound message detection (skips own messages,
+                // deleted messages, and system messages)
+                if (platform === 'linkedin' && adapter.getLastInboundMessageText) {
+                    sourceMessageText = adapter.getLastInboundMessageText();
+                    console.log('[ResponseAble DEBUG] LinkedIn getLastInboundMessageText:', sourceMessageText ? sourceMessageText.substring(0, 80) + '...' : '(empty)');
                 } else {
-                    // Fallback: if we can't find the specific email, use the latest one
-                    const threadMessages = adapter.getThreadMessages();
-                    sourceMessageText = threadMessages.length > 0 ? threadMessages[threadMessages.length - 1] : '';
+                    // Gmail / generic: use DOM-based detection
+                    const emailBeingRepliedTo = adapter.getEmailBeingRepliedTo
+                        ? adapter.getEmailBeingRepliedTo()
+                        : null;
+
+                    if (emailBeingRepliedTo) {
+                        sourceMessageText = emailBeingRepliedTo.innerText?.trim() || emailBeingRepliedTo.textContent?.trim() || '';
+                    } else {
+                        // Absolute fallback: use the latest thread message
+                        const threadMessages = adapter.getThreadMessages();
+                        sourceMessageText = threadMessages.length > 0 ? threadMessages[threadMessages.length - 1] : '';
+                    }
                 }
             }
 
@@ -2998,8 +3340,7 @@ const injectGenerateButton = () => {
                 await getCachedOrValidateLicense();
 
                 updateButtonText(generateButton, 'Working...');
-                generateButton.style.opacity = '0.7';
-                generateButton.disabled = true; // Disable button during generation
+                generateButton.disabled = true; // Disable button during generation (CSS :disabled handles opacity)
 
                 // Get user packages and default role
                 const userPackages = await getUserPackages();
@@ -3360,13 +3701,24 @@ const injectGenerateButton = () => {
                     }
                 } finally {
                     updateButtonText(generateButton, currentButtonText);
-                    generateButton.style.opacity = '1';
+                    resetButtonStyle(generateButton, platform); // Re-apply full inline style
                     generateButton.disabled = false; // Re-enable button after generation
                 }
                 return;
             }
 
-            // REPLY: Use classification flow with immediate progress overlay
+            // REPLY: Extract any user-typed content from the compose field.
+            // This is NOT used for classification/analysis (which stays pure),
+            // but is passed to draft generation so the LLM can incorporate the
+            // user's draft-in-progress as directional context.
+            let replyTypedContent = '';
+            const replyComposeInput = adapter.findComposeInput
+                ? adapter.findComposeInput()
+                : (platform === 'gmail' ? document.querySelector('div[aria-label="Message Body"][role="textbox"]') : null);
+            if (replyComposeInput) {
+                replyTypedContent = (replyComposeInput.innerText || replyComposeInput.textContent || '').trim();
+            }
+
             // Create AbortController so cancelling the progress overlay aborts in-flight requests
             const replyAbortController = new AbortController();
             const replyAbortSignal = replyAbortController.signal;
@@ -3379,7 +3731,7 @@ const injectGenerateButton = () => {
 
             // Update button to show we're working
             updateButtonText(generateButton, 'Working...');
-            generateButton.style.opacity = '0.7';
+            generateButton.disabled = true; // CSS :disabled handles opacity
 
             // Progress callback to update the overlay as each step completes
             const onProgress = (progress) => {
@@ -3414,7 +3766,8 @@ const injectGenerateButton = () => {
                     ccRecipients: ccRecipients,  // CC recipients
                     emailDetails: emailDetails,  // Full email details (subject, senderName, senderEmail, body, to, cc)
                     recipientName,
-                    recipientCompany
+                    recipientCompany,
+                    typedContent: replyTypedContent  // User's draft-in-progress (for generation only, not classification)
                 };
                 await generateDraftsWithTone(
                     richContext,
@@ -3452,23 +3805,10 @@ const injectGenerateButton = () => {
             } finally {
                 // Remove progress overlay if still present
                 document.querySelector('.responseable-overlay.responseable-progress-overlay')?.remove();
-                // Restore button text (icon should still be there)
+                // Restore button text and full inline style (icon should still be there)
                 updateButtonText(generateButton, currentButtonText);
-                generateButton.style.opacity = '1';
+                resetButtonStyle(generateButton, platform); // Re-apply full inline style
                 generateButton.disabled = false; // Re-enable button
-                // Restore platform-specific styles
-                if (platform === 'linkedin') {
-                    generateButton.style.borderRadius = '16px';
-                    generateButton.style.height = '28px';
-                    generateButton.style.padding = '4px 12px';
-                    generateButton.style.margin = '0 8px 0 0';
-                    generateButton.style.background = '#0A66C2';
-                    generateButton.style.fontWeight = '600';
-                    generateButton.style.display = 'inline-flex';
-                    generateButton.style.alignItems = 'center';
-                    generateButton.style.verticalAlign = 'middle';
-                    generateButton.style.alignSelf = 'center';
-                }
             }
         });
 
@@ -4023,6 +4363,8 @@ Email body: ${composeBodyText || '(not provided)'}`
             abortSignal
         );
     } catch (error) {
+        // AbortError = user cancelled — let it bubble silently (outer handler will catch)
+        if (error.name === 'AbortError') throw error;
         if (!isRateLimitError(error)) console.error('Error generating drafts for new email:', error);
         throw error;
     }
@@ -4074,6 +4416,8 @@ const showLicenseRequiredPopup = () => {
         z-index: 2147483647;
         padding: 32px 28px 28px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
         text-align: center;
     `;
     overlay.innerHTML = `
@@ -4164,6 +4508,8 @@ const showRateLimitPopup = () => {
         z-index: 2147483647;
         padding: 32px 28px 28px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
         text-align: center;
     `;
     overlay.innerHTML = `
@@ -4409,11 +4755,14 @@ const generateDraftsWithTone = async (richContext, sourceMessageText, platform, 
                 );
             } else {
                 // Reply draft - use generate-drafts-reply endpoint
+                // Include user's draft-in-progress if available (for generation context, not classification)
+                const replyTypedContent = (regenerateContext && regenerateContext.typedContent) || '';
                 draftsText = await callNewStreamingAPI(
                     `${VERCEL_PROXY_URL}/generate-drafts-reply`,
                     {
                         emailContent: emailBeingRepliedTo,
                         threadHistory: previousThreadHistory,
+                        typedContent: replyTypedContent || undefined,  // Only send if non-empty
                         package: matchedPackage,
                         variantSet: variantSet,
                         currentGoal: currentGoal,
@@ -4487,6 +4836,8 @@ const showStreamingOverlay = (initialText = '') => {
         z-index: 2147483647;
         padding: 24px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
         display: flex;
         flex-direction: column;
     `;
@@ -4625,6 +4976,8 @@ const showProgressOverlay = (onCancel = null) => {
         z-index: 2147483647;
         padding: 24px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
         display: flex;
         flex-direction: column;
     `;
@@ -4843,6 +5196,8 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
     z-index: 2147483647;
     padding: 24px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
     display: flex;
     flex-direction: column;
   `;
@@ -5437,7 +5792,7 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
                 composeBody.parentElement?.parentElement?.parentElement;
         }
     } else if (platform === 'linkedin') {
-        const composeInput = adapter.findComposeInput(sendButton);
+        const composeInput = adapter.findComposeInput();
         if (composeInput) {
             composeContainer = composeInput.closest('[role="dialog"], .msg-form, .msg-s-message-list__compose-container') ||
                 composeInput.closest('form') ||
@@ -5461,13 +5816,17 @@ const showDraftsOverlay = async (draftsText, context, platform, customAdapter = 
         let intervalId = null;
 
         const checkComposeClosed = () => {
-            // Check multiple conditions to detect if compose window is closed
+            // Check multiple conditions to detect if compose window is closed.
+            // IMPORTANT: Use .isConnected instead of document.body.contains()
+            // because contains() does NOT cross Shadow DOM boundaries.
+            // LinkedIn popup chat lives inside #interop-outlet's shadowRoot,
+            // so contains() returns false even when the element is still alive.
             const composeBody = adapter.findComposeInput();
-            const isContainerRemoved = !document.body.contains(composeContainer) || !composeContainer.isConnected;
+            const isContainerRemoved = !composeContainer.isConnected;
             const isContainerHidden = composeContainer.offsetParent === null ||
                 composeContainer.style.display === 'none' ||
                 composeContainer.style.visibility === 'hidden';
-            const isComposeBodyGone = !composeBody || !document.body.contains(composeBody);
+            const isComposeBodyGone = !composeBody || !composeBody.isConnected;
 
             // If any of these conditions are true, the compose window is likely closed
             if (isContainerRemoved || (isContainerHidden && isComposeBodyGone)) {
@@ -5556,10 +5915,19 @@ const createCommentButtonHandler = (editor) => {
             const commentAdapter = {
                 insertText: (text) => {
                     editor.focus();
-                    editor.innerHTML = '';
-                    editor.innerText = text;
-                    const inputEvent = new Event('input', { bubbles: true });
-                    editor.dispatchEvent(inputEvent);
+                    const cleared = document.execCommand('selectAll', false, null) &&
+                                    document.execCommand('delete', false, null);
+                    const inserted = cleared && document.execCommand('insertText', false, text);
+                    if (!inserted) {
+                        // Fallback: direct DOM write + synthetic InputEvent
+                        editor.innerHTML = '';
+                        editor.innerText = text;
+                        editor.dispatchEvent(new InputEvent('input', {
+                            bubbles: true,
+                            inputType: 'insertText',
+                            data: text
+                        }));
+                    }
                 }
             };
 

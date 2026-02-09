@@ -1,9 +1,10 @@
-﻿# Exclude node_modules (thousands of files - major performance impact)
+# Exclude node_modules (thousands of files - major performance impact)
 node_modules/
 
 # Exclude documentation from semantic search
 *.md
 !README.md
+!docs/FUTURE_ENHANCEMENTS.md
 
 # Build outputs
 build/
