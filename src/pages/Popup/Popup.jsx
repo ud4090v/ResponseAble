@@ -56,6 +56,18 @@ const Popup = () => {
       }
     }
 
+    // Listen for storage changes (e.g. license key sent from website via background script)
+    const onStorageChanged = (changes, area) => {
+      if (area === 'sync') {
+        if (changes.licenseKey && changes.licenseKey.newValue) {
+          setLicenseKey(changes.licenseKey.newValue);
+        }
+      }
+    };
+    if (browserAPI.storage && browserAPI.storage.onChanged) {
+      browserAPI.storage.onChanged.addListener(onStorageChanged);
+    }
+
     if (browserAPI.storage) {
       browserAPI.storage.local.get(['metrics'], (result) => {
         const metrics = result.metrics || {
@@ -118,6 +130,12 @@ const Popup = () => {
         });
       });
     }
+    // Cleanup storage change listener
+    return () => {
+      if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
+        browserAPI.storage.onChanged.removeListener(onStorageChanged);
+      }
+    };
   }, []);
 
   // Fetch usage for Settings tab (plan, packages, usage summary)
@@ -194,7 +212,7 @@ const Popup = () => {
   const hasLicense = licenseKey && licenseKey.trim().length > 0;
 
   const openPricing = () => {
-    window.open('https://xrepl.ai/pricing', '_blank');
+    window.open('https://xrepl.ai/?auth=extension', '_blank');
   };
 
   return (
@@ -210,11 +228,11 @@ const Popup = () => {
         {!hasLicense ? (
           <>
             <div className="popup-info">
-              <p>Enter your license key in Settings to use xReplAI, or get access below.</p>
+              <p>Sign in to activate xReplAI, or enter your license key manually in Settings.</p>
             </div>
             <div className="popup-buttons" style={{ flexDirection: 'column', marginTop: '12px' }}>
               <button type="button" className="popup-button" onClick={openPricing} style={{ width: '100%' }}>
-                Get Access
+                Sign In / Get Access
               </button>
               <button type="button" className="popup-button popup-button-secondary" onClick={openOptions}>
                 Open Settings
