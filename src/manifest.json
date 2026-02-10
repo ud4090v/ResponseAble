@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "version": "1.0.11",
-  "name": "xReplAI",
-  "description": "AI-powered email draft generation for Gmail and LinkedIn. Multi-variant replies with style mimicking and tone selection.",
+  "name": "xRepl – AI Email Drafter",
+  "short_name": "xRepl",
+  "description": "Instantly generate smart, personalized email drafts in Gmail & LinkedIn with AI. Powered by Grok-4 in Pro. Free tier available. Works seamlessly where you already work.",
   "options_page": "options.html",
   "background": {
     "service_worker": "background.bundle.js"
