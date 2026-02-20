@@ -459,56 +459,10 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   };
 
   /**
-   * Handle package purchase
-   * @param packageId - Package ID to purchase
-   * @param packageName - Package name for display
+   * Handle package purchase — redirect to website My Account
    */
-  const executePackagePurchase = async (packageId: string, packageName: string) => {
-    try {
-      const optionsPageUrl = chrome.runtime.getURL('options.html');
-      const successUrl = `${optionsPageUrl}?purchase=success&package=${packageName}`;
-      const cancelUrl = `${optionsPageUrl}?purchase=cancel`;
-
-      const response = await fetch(`${VERCEL_PROXY_URL}/packages/purchase`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          licenseKey: licenseKey.trim(),
-          packageId,
-          successUrl,
-          cancelUrl,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.success && data.checkout_url) {
-        window.location.href = data.checkout_url;
-      } else {
-        showToast('error', data.error || 'Failed to create checkout session. Please try again.');
-      }
-    } catch (error) {
-      console.error('Package purchase error:', error);
-      showToast('error', 'Failed to initiate purchase. Please check your connection and try again.');
-    }
-  };
-
-  const handlePackagePurchase = (packageId: string, packageName: string) => {
-    if (!licenseKey || licenseKey.trim().length === 0) {
-      showToast('warning', 'Please activate your license key first.');
-      return;
-    }
-    if (licenseStatus.status !== 'success') {
-      showToast('warning', 'Please ensure your license key is valid before purchasing packages.');
-      return;
-    }
-    setConfirmDialog({
-      message: `Purchase the ${packageName} package? You will be redirected to Stripe checkout.`,
-      onConfirm: () => {
-        setConfirmDialog(null);
-        executePackagePurchase(packageId, packageName);
-      },
-    });
+  const handlePackagePurchase = () => {
+    window.open('https://xrepl.app/account', '_blank');
   };
 
   // Auto-reset default role to generic if it's not in selected packages
@@ -1196,7 +1150,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
                         <button
                           type="button"
                           className="SaveButton SaveButton--shrink"
-                          onClick={() => handlePackagePurchase(pkg.id, pkg.name)}
+                          onClick={() => handlePackagePurchase()}
                         >
                           ${pkg.price_usd.toFixed(2)}
                         </button>
