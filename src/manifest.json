@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "version": "1.0.11",
+  "version": "1.0.12",
   "name": "xRepl – AI Email Drafter",
   "short_name": "xRepl",
   "description": "Generate smart, personalized email drafts in Gmail & LinkedIn with AI. Powered by Grok-4 in Pro. Free tier available.",
