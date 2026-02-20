@@ -1,7 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './Options.css';
 import { VERCEL_PROXY_URL } from '../../config/apiKeys.js';
 import UsageDisplay from '../../components/UsageDisplay';
+
+type ToastType = 'success' | 'error' | 'warning';
+interface ToastState { type: ToastType; message: string }
+interface ConfirmState { message: string; onConfirm: () => void }
 
 interface Props {
   title: string;
@@ -92,6 +96,15 @@ const Options: React.FC<Props> = ({ title }: Props) => {
   const [packagesLoading, setPackagesLoading] = useState<boolean>(false);
   const [overageEnabled, setOverageEnabled] = useState<boolean>(true);
   const [overageLoading, setOverageLoading] = useState<boolean>(false);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmState | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((type: ToastType, message: string) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ type, message });
+    toastTimer.current = setTimeout(() => setToast(null), 4000);
+  }, []);
 
   useEffect(() => {
     // Get icon URL
@@ -111,8 +124,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
     const packageName = urlParams.get('package');
 
     if (purchaseStatus === 'success' && packageName) {
-      // Show success message
-      alert(`Successfully purchased ${packageName} package! Refreshing packages...`);
+      showToast('success', `Successfully purchased ${packageName} package! Refreshing packages...`);
       // Refresh packages if license is active
       if (licenseKey && licenseKey.trim().length > 0) {
         fetchPackages(licenseKey);
@@ -412,7 +424,7 @@ const Options: React.FC<Props> = ({ title }: Props) => {
    */
   const updateOverageSetting = async (enabled: boolean) => {
     if (!licenseKey || licenseKey.trim().length === 0) {
-      alert('Please activate your license key first.');
+      showToast('warning', 'Please activate your license key first.');
       return;
     }
 
@@ -435,12 +447,12 @@ const Options: React.FC<Props> = ({ title }: Props) => {
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
       } else {
-        const error = await response.json();
-        alert(`Failed to update overage setting: ${error.error || 'Unknown error'}`);
+        const errData = await response.json();
+        showToast('error', `Failed to update overage setting: ${errData.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Error updating overage setting:', error);
-      alert('Failed to update overage setting. Please try again.');
+      showToast('error', 'Failed to update overage setting. Please try again.');
     } finally {
       setOverageLoading(false);
     }
@@ -451,55 +463,52 @@ const Options: React.FC<Props> = ({ title }: Props) => {
    * @param packageId - Package ID to purchase
    * @param packageName - Package name for display
    */
-  const handlePackagePurchase = async (packageId: string, packageName: string) => {
-    if (!licenseKey || licenseKey.trim().length === 0) {
-      alert('Please activate your license key first.');
-      return;
-    }
-
-    if (licenseStatus.status !== 'success') {
-      alert('Please ensure your license key is valid before purchasing packages.');
-      return;
-    }
-
-    // Confirm purchase
-    const confirmed = confirm(`Purchase ${packageName} package? You will be redirected to Stripe checkout.`);
-    if (!confirmed) {
-      return;
-    }
-
+  const executePackagePurchase = async (packageId: string, packageName: string) => {
     try {
-      // Get current extension options page URL for success/cancel redirects
       const optionsPageUrl = chrome.runtime.getURL('options.html');
       const successUrl = `${optionsPageUrl}?purchase=success&package=${packageName}`;
       const cancelUrl = `${optionsPageUrl}?purchase=cancel`;
 
-      // Call purchase API
       const response = await fetch(`${VERCEL_PROXY_URL}/packages/purchase`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           licenseKey: licenseKey.trim(),
-          packageId: packageId,
-          successUrl: successUrl,
-          cancelUrl: cancelUrl,
+          packageId,
+          successUrl,
+          cancelUrl,
         }),
       });
 
       const data = await response.json();
 
       if (data.success && data.checkout_url) {
-        // Redirect to Stripe checkout
         window.location.href = data.checkout_url;
       } else {
-        alert(data.error || 'Failed to create checkout session. Please try again.');
+        showToast('error', data.error || 'Failed to create checkout session. Please try again.');
       }
     } catch (error) {
       console.error('Package purchase error:', error);
-      alert('Failed to initiate purchase. Please check your connection and try again.');
+      showToast('error', 'Failed to initiate purchase. Please check your connection and try again.');
     }
+  };
+
+  const handlePackagePurchase = (packageId: string, packageName: string) => {
+    if (!licenseKey || licenseKey.trim().length === 0) {
+      showToast('warning', 'Please activate your license key first.');
+      return;
+    }
+    if (licenseStatus.status !== 'success') {
+      showToast('warning', 'Please ensure your license key is valid before purchasing packages.');
+      return;
+    }
+    setConfirmDialog({
+      message: `Purchase the ${packageName} package? You will be redirected to Stripe checkout.`,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        executePackagePurchase(packageId, packageName);
+      },
+    });
   };
 
   // Auto-reset default role to generic if it's not in selected packages
@@ -1238,6 +1247,34 @@ const Options: React.FC<Props> = ({ title }: Props) => {
           </button>
         </div>
       </div>
+
+      {/* Toast notification */}
+      {toast && (
+        <div className={`Toast Toast--${toast.type}`} role="alert">
+          <span className="Toast__icon">
+            {toast.type === 'success' ? '✓' : toast.type === 'error' ? '✗' : '⚠'}
+          </span>
+          <span className="Toast__message">{toast.message}</span>
+          <button className="Toast__close" onClick={() => setToast(null)} aria-label="Dismiss">×</button>
+        </div>
+      )}
+
+      {/* Confirm modal */}
+      {confirmDialog && (
+        <div className="ConfirmOverlay" onClick={() => setConfirmDialog(null)}>
+          <div className="ConfirmModal" onClick={(e) => e.stopPropagation()}>
+            <p className="ConfirmModal__message">{confirmDialog.message}</p>
+            <div className="ConfirmModal__actions">
+              <button className="ConfirmModal__btn ConfirmModal__btn--cancel" onClick={() => setConfirmDialog(null)}>
+                Cancel
+              </button>
+              <button className="ConfirmModal__btn ConfirmModal__btn--confirm" onClick={confirmDialog.onConfirm}>
+                Continue to Checkout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
