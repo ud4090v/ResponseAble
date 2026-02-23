@@ -37,10 +37,72 @@ chrome.runtime.onMessageExternal.addListener(
       return true;
     }
 
+    // Handle account deletion - clear all extension data
+    if (message && message.type === 'ACCOUNT_DELETED') {
+      clearAllExtensionData()
+        .then(() => sendResponse({ success: true }))
+        .catch((err) => {
+          console.error('Failed to clear extension data:', err);
+          sendResponse({ success: false, error: 'Failed to clear data' });
+        });
+      return true;
+    }
+
     sendResponse({ success: false, error: 'Unknown message type' });
     return false;
   }
 );
+
+/**
+ * Clear all extension data when account is deleted.
+ * Resets to fresh state (free plan, no license).
+ */
+async function clearAllExtensionData() {
+  // Clear sync storage (settings, license key)
+  await new Promise((resolve, reject) => {
+    chrome.storage.sync.clear(() => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+      } else {
+        resolve();
+      }
+    });
+  });
+
+  // Clear local storage (cached data)
+  await new Promise((resolve, reject) => {
+    chrome.storage.local.clear(() => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+      } else {
+        resolve();
+      }
+    });
+  });
+
+  // Set default values for fresh start
+  await new Promise((resolve, reject) => {
+    chrome.storage.sync.set(
+      {
+        licenseKey: '',
+        subscriptionPlan: 'free',
+        selectedPackages: ['generic'],
+        defaultRole: 'generic',
+        apiProvider: 'grok',
+        apiModel: 'grok-4-latest',
+      },
+      () => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+        } else {
+          resolve();
+        }
+      }
+    );
+  });
+
+  console.log('Extension data cleared due to account deletion');
+}
 
 /**
  * Validate a license key via the backend /validate endpoint,
